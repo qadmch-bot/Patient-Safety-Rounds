@@ -1,8 +1,16 @@
 {
+  "rewrites": [
+    { "source": "/round/:token", "destination": "/index.html" },
+    { "source": "/plan/:token", "destination": "/index.html" }
+  ],
   "crons": [
     {
       "path": "/api/process-reminders",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/process-plan-reminders",
+      "schedule": "0 8 * * *"
     }
   ]
 }

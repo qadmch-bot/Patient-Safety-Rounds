@@ -322,6 +322,11 @@ en:{
   plan_followup:"Plan Follow-Up",
   plan_form_nav:"Improvement Plan Form",
   notifications_nav:"Notification Center",
+  qps_review_nav:"QPS Observation Review",
+  findings_live_nav:"Findings by Department",
+  plans_live_nav:"Corrective Plans",
+  round_followup_nav:"Previous Round Follow-up",
+  executive_report_nav:"Executive Report",
 },
 ar:{
   dashboard:"لوحة القيادة", calendar:"التقويم", rounds:"الجولات", departments:"الأقسام",
@@ -335,6 +340,11 @@ ar:{
   plan_followup:"متابعة الخطط التحسينية",
   plan_form_nav:"نموذج الخطة التحسينية",
   notifications_nav:"مركز الإشعارات",
+  qps_review_nav:"مراجعة ملاحظات الجولة",
+  findings_live_nav:"الملاحظات حسب القسم",
+  plans_live_nav:"الخطط التصحيحية",
+  round_followup_nav:"متابعة ملاحظات الجولة السابقة",
+  executive_report_nav:"التقرير التنفيذي",
 }};
 function t(k){ return (I18N[STATE.lang]||I18N.en)[k] || k; }
 
@@ -600,9 +610,26 @@ let WHATSAPP_CONFIG = {
 };
 let WHATSAPP_LOG = [];
 let WA_SEQ = 0;
-// This environment has no server-side component — see honesty note above. Kept as a
-// single, obvious gate so wiring a real backend later only requires changing this.
-function whatsappBackendConnected(){ return true; }
+// Real, checked backend status — never assumed. Populated by refreshWhatsAppBackendStatus(),
+// which calls GET /api/whatsapp-status (a live Twilio credential check, no message sent).
+// whatsappBackendConnected() is synchronous because many render() calls read it — it always
+// reflects the last real check, defaulting to false (not connected) until one succeeds.
+let WA_BACKEND_STATUS = { connected:false, checkedAt:null, detail:null };
+function whatsappBackendConnected(){ return WA_BACKEND_STATUS.connected; }
+async function refreshWhatsAppBackendStatus(silent){
+  try {
+    const res = await fetch('/api/whatsapp-status');
+    const data = await res.json();
+    WA_BACKEND_STATUS.connected = !!data.success;
+    WA_BACKEND_STATUS.detail = data;
+  } catch(error) {
+    WA_BACKEND_STATUS.connected = false;
+    WA_BACKEND_STATUS.detail = { success:false, error: error.message };
+  }
+  WA_BACKEND_STATUS.checkedAt = fmtDateTime(new Date());
+  if(!silent) render();
+  return WA_BACKEND_STATUS.connected;
+}
 function whatsappProviderConfigured(){
   const cfg = WHATSAPP_CONFIG;
   return !!(cfg.provider && cfg.testRecipient);
@@ -611,22 +638,37 @@ function waLog(entry){
   WA_SEQ++;
   WHATSAPP_LOG.unshift(Object.assign({id:'WA-'+String(WA_SEQ).padStart(4,'0'), date:fmtDateTime(new Date())}, entry));
 }
-function whatsappFailureMessage(){
-  return STATE.lang==='ar'
+function whatsappFailureMessage(detailError){
+  const base = STATE.lang==='ar'
     ? 'يتطلب الأمر إعداد تكامل واجهة برمجة تطبيقات WhatsApp (من خلال خادم آمن) قبل إمكانية إرسال رسائل فعلية.'
     : 'WhatsApp API configuration is required before real messages can be sent.';
+  return detailError ? `${base} (${detailError})` : base;
 }
-// Suggested backend endpoints (see spec): POST /api/whatsapp/{test,send,schedule,retry}, GET /api/whatsapp/{status,logs}
-function waTestConnection(){
+// Real connectivity check — calls GET /api/whatsapp-status, which itself calls the Twilio
+// Account API with the credentials configured in Vercel Environment Variables. No message
+// is sent. Reports the true result; never assumes success.
+async function waTestConnection(){
   const cfg = WHATSAPP_CONFIG;
-  if(!whatsappBackendConnected()){
-    cfg.lastFailedTest = fmtDateTime(new Date()); cfg.lastError = STATE.lang==='ar'?'لا يوجد خادم/تكامل متصل بواجهة WhatsApp في هذه البيئة.':'No backend/server-side integration is connected to a WhatsApp API in this environment.';
+  const connected = await refreshWhatsAppBackendStatus(true);
+  const detail = WA_BACKEND_STATUS.detail || {};
+
+  if(!connected){
+    cfg.lastFailedTest = fmtDateTime(new Date());
+    cfg.lastError = detail.error || (STATE.lang==='ar'?'تعذّر الاتصال بواجهة WhatsApp.':'Unable to connect to the WhatsApp API.');
     waLog({type:'Test Connection', roundId:'—', recipient:cfg.testRecipient||'—', recipientName:'Test Recipient', scheduledTime:'—', sentTime:fmtDateTime(new Date()), provider:cfg.provider||(STATE.lang==='ar'?'غير محدد':'Not selected'), status:'Failed', messageId:null, deliveryStatus:'—', error:cfg.lastError, retryCount:0});
     logAudit(currentActorName(), 'WhatsApp Test Connection', 'WhatsApp', 'Test connection attempted — failed: '+cfg.lastError);
-    toast(whatsappFailureMessage());
+    toast(whatsappFailureMessage(detail.error));
+    render();
     return false;
   }
-  return true; // unreachable while whatsappBackendConnected() is false — real integration point.
+
+  cfg.lastSuccessfulTest = fmtDateTime(new Date());
+  cfg.lastError = '';
+  waLog({type:'Test Connection', roundId:'—', recipient:cfg.testRecipient||'—', recipientName:'Test Recipient', scheduledTime:'—', sentTime:fmtDateTime(new Date()), provider:'Twilio WhatsApp', status:'Sent', messageId:null, deliveryStatus:detail.account_status||'verified', retryCount:0});
+  logAudit(currentActorName(), 'WhatsApp Test Connection', 'WhatsApp', `Test connection succeeded — Twilio account "${detail.account_friendly_name||''}" reachable.`);
+  toast(STATE.lang==='ar'?'تم التحقق من الاتصال بنجاح':'Connection verified successfully');
+  render();
+  return true;
 }
 async function waSendTestMessage(){
   const cfg = WHATSAPP_CONFIG;
@@ -724,31 +766,119 @@ function waRetry(logId){
   toast(whatsappFailureMessage());
   go('admin',{tab:'whatsapp-log'});
 }
-// Scheduling hook: called whenever a round is created/rescheduled. Computes reminder
-// timing and queues log entries as "Scheduled" — actual sending still requires a
-// connected backend (see whatsappBackendConnected()).
-function waScheduleRoundReminders(round){
-  if(!whatsappProviderConfigured()) return;
-  const members = ROUND_MEMBERS.filter(m=>m.waEnabled);
-  [['24h','24-Hour Reminder'],['1h','1-Hour Reminder']].forEach(([key,label])=>{
-    members.forEach(m=>{
-      const eventKey = round.id+'|'+m.name+'|'+key; // duplicate-prevention key: Round + Recipient + Reminder Type
-      if(WHATSAPP_LOG.some(l=>l.eventKey===eventKey)) return;
-      waLog({type:label, roundId:round.id, recipient:m.mobile||'—', recipientName:m.name, scheduledTime:round.plannedDate+' '+round.plannedTime, sentTime:'—', provider:WHATSAPP_CONFIG.provider||'—', status:'Scheduled', messageId:null, deliveryStatus:'—', error:null, retryCount:0, eventKey});
+// Scheduling hook: called after a round is persisted (see submitNewRound). Actually
+// creates the 24h/1h reminder rows in Supabase via POST /api/create-reminder — the
+// existing process-reminders cron (vercel.json, every 5 min) then sends them for real.
+// This is async and reflects the true server result; it never fabricates a "Scheduled"
+// entry locally without the server having actually written the row.
+async function waScheduleRoundReminders(roundId){
+  if(!whatsappProviderConfigured()){
+    toast(STATE.lang==='ar'?'لم يتم إعداد مزود WhatsApp — لن يتم إنشاء تذكيرات فعلية.':'No WhatsApp provider configured — no real reminders will be created.');
+    return { created: 0 };
+  }
+  try {
+    const res = await fetch('/api/create-reminder', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ round_id: roundId })
     });
-  });
+    const data = await res.json();
+    if(!res.ok || !data.success){
+      toast(whatsappFailureMessage(data.error));
+      logAudit(currentActorName(), 'Reminder Creation Failed', 'WhatsApp', `Failed to create reminders for ${roundId}: ${data.error||'unknown error'}`);
+      return { created: 0, error: data.error };
+    }
+    (data.reminders||[]).forEach(row=>{
+      waLog({type: row.reminder_type==='24h'?'24-Hour Reminder':'1-Hour Reminder', roundId: row.round_id, recipient: row.recipient_phone, recipientName: row.recipient_name, scheduledTime: row.scheduled_at, sentTime:'—', provider: WHATSAPP_CONFIG.provider||'—', status:'Scheduled', messageId:null, deliveryStatus:'—', error:null, retryCount:0, eventKey: row.event_key});
+    });
+    if(data.created>0){
+      toast(STATE.lang==='ar'?`تم إنشاء ${data.created} تذكير فعلي في قاعدة البيانات`:`${data.created} real reminder(s) queued in the database`);
+    } else if(data.message){
+      toast(data.message);
+    }
+    return data;
+  } catch(error){
+    toast(whatsappFailureMessage(error.message));
+    logAudit(currentActorName(), 'Reminder Creation Failed', 'WhatsApp', `Failed to create reminders for ${roundId}: ${error.message}`);
+    return { created: 0, error: error.message };
+  }
 }
 
-let ROUND_MEMBERS = [
-  {name:'Mr. Sami Awad Al Harbi', role:'Hospital Director', dept:'ALL', mobile:'', waEnabled:false, lang:'ar'},
-  {name:'Mr. Abdulellah Ayed Al Mutairi', role:'QM&PS Director', dept:'ALL', mobile:'', waEnabled:false, lang:'ar'},
-  {name:'Ph. Mutlaq K. Al-Dhafeeri', role:'Pharmaceutical Care Department Head', dept:'PHARMACY', mobile:'', waEnabled:false, lang:'ar'},
-  {name:'Mr. Sabah Al-Harbi', role:'Director of Nursing', dept:'ALL', mobile:'', waEnabled:false, lang:'ar'},
-  {name:'Ms. Noura Al Anizi', role:'Lab & Blood Bank Department Head', dept:'LAB', mobile:'', waEnabled:false, lang:'en'},
-  {name:'Mr. Salman Al Otaibi', role:'Safety Officer Manager', dept:'ALL', mobile:'', waEnabled:false, lang:'ar'},
-  {name:'Ms. Awatif Al Harbi', role:'IPCD Director', dept:'ALL', mobile:'', waEnabled:false, lang:'ar'},
-  {name:'Mr. Mishari Fareed Al Shammari', role:'Risk Manager', dept:'ALL', mobile:'', waEnabled:false, lang:'ar'},
+/* ---------------------------- PATIENT SAFETY ROUNDS MEMBERS (persisted) ----------------------------
+   Loaded from / saved to Supabase via /api/round-members. Never a hardcoded in-memory
+   list — refreshing the browser, or opening the system from another device, shows the
+   same real data because it lives in the database, not in this script. */
+let ROUND_MEMBERS = [];
+let ROUND_MEMBERS_LOADED = false;
+async function loadRoundMembers(){
+  try {
+    const res = await fetch('/api/round-members');
+    const data = await res.json();
+    if(res.ok && data.success){
+      ROUND_MEMBERS = data.members || [];
+    } else {
+      toast(STATE.lang==='ar'?'تعذّر تحميل أعضاء الجولات من قاعدة البيانات':'Could not load round members from the database');
+    }
+  } catch(error){
+    toast(STATE.lang==='ar'?'تعذّر الاتصال بقاعدة البيانات':'Could not reach the database');
+  }
+  ROUND_MEMBERS_LOADED = true;
+  render();
+}
+async function addRoundMember(payload){
+  try {
+    const res = await fetch('/api/round-members', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({actor: currentActorName()}, payload))
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success){ toast(data.error||'Save failed'); return null; }
+    ROUND_MEMBERS.push(data.member);
+    toast(STATE.lang==='ar'?'تم حفظ العضو':'Member saved');
+    render();
+    return data.member;
+  } catch(error){ toast(error.message); return null; }
+}
+async function updateRoundMember(id, patch){
+  try {
+    const res = await fetch(`/api/round-members?id=${encodeURIComponent(id)}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({actor: currentActorName()}, patch))
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success){ toast(data.error||'Update failed'); return null; }
+    const idx = ROUND_MEMBERS.findIndex(m=>String(m.id)===String(id));
+    if(idx>-1) ROUND_MEMBERS[idx] = data.member;
+    return data.member;
+  } catch(error){ toast(error.message); return null; }
+}
+async function deleteRoundMember(id){
+  if(!confirm(STATE.lang==='ar'?'هل تريد حذف هذا العضو؟':'Delete this member?')) return;
+  try {
+    const res = await fetch(`/api/round-members?id=${encodeURIComponent(id)}`, { method:'DELETE' });
+    const data = await res.json();
+    if(!res.ok || !data.success){ toast(data.error||'Delete failed'); return; }
+    ROUND_MEMBERS = ROUND_MEMBERS.filter(m=>String(m.id)!==String(id));
+    toast(STATE.lang==='ar'?'تم حذف العضو':'Member deleted');
+    render();
+  } catch(error){ toast(error.message); }
+}
+// One-click convenience to seed the roster that appears on the hospital's signed round
+// sheet — explicit user action only, never auto-run, so nothing fake ever appears silently.
+const DEFAULT_ROSTER = [
+  {full_name:'Mr. Sami Awad Al Harbi', job_title:'Hospital Director', department:'ALL', preferred_language:'ar'},
+  {full_name:'Mr. Abdulellah Ayed Al Mutairi', job_title:'QM&PS Director', department:'ALL', preferred_language:'ar'},
+  {full_name:'Ph. Mutlaq K. Al-Dhafeeri', job_title:'Pharmaceutical Care Department Head', department:'PHARMACY', preferred_language:'ar'},
+  {full_name:'Mr. Sabah Al-Harbi', job_title:'Director of Nursing', department:'ALL', preferred_language:'ar'},
+  {full_name:'Ms. Noura Al Anizi', job_title:'Lab & Blood Bank Department Head', department:'LAB', preferred_language:'en'},
+  {full_name:'Mr. Salman Al Otaibi', job_title:'Safety Officer Manager', department:'ALL', preferred_language:'ar'},
+  {full_name:'Ms. Awatif Al Harbi', job_title:'IPCD Director', department:'ALL', preferred_language:'ar'},
+  {full_name:'Mr. Mishari Fareed Al Shammari', job_title:'Risk Manager', department:'ALL', preferred_language:'ar'},
 ];
+async function importDefaultRoster(){
+  if(!confirm(STATE.lang==='ar'?'سيتم إضافة القائمة الافتراضية لأعضاء الجولات. متابعة؟':'This will add the default round-members roster. Continue?')) return;
+  for(const m of DEFAULT_ROSTER){ await addRoundMember(m); }
+}
 
 let AUDIT = [
  {id:1, date:'2026-08-10 11:20', by:'Mr. Abdulellah Al Mutairi', action:'Round Completed', entity:'PSR-2026-002', details:'Patient Safety Round for OBS ER + Laboratory & Blood Bank completed and signed by all round members.'},
@@ -1108,12 +1238,18 @@ function navConfig(){
       {view:'recurring', ic:'🔁', label:'recurring', badge:()=>allRecurringGroups().length},
     ]},
     {label:{en:'Records',ar:'السجلات'}, items:[
-      {view:'plan-form', ic:'📄', label:'plan_form_nav'},
       {view:'reports', ic:'🖨️', label:'reports'},
       {view:'evidence', ic:'📎', label:'evidence'},
       {view:'notifications', ic:'🔔', label:'notifications_nav'},
     ]},
   ];
+  groups.splice(1, 0, {label:{en:'Live Workflow',ar:'سير العمل المباشر'}, items:[
+    {view:'qps-review', ic:'🔎', label:'qps_review_nav'},
+    {view:'findings-live', ic:'🗂️', label:'findings_live_nav'},
+    {view:'plans-live', ic:'📝', label:'plans_live_nav'},
+    {view:'round-followup', ic:'🔁', label:'round_followup_nav'},
+    {view:'executive-report', ic:'📊', label:'executive_report_nav'},
+  ]});
   if(STATE.role==='quality') groups.push({label:{en:'System',ar:'النظام'}, items:[{view:'admin', ic:'⚙️', label:'admin'}]});
   return groups;
 }
@@ -1228,7 +1364,6 @@ function render(){
     else if(v==='obs-detail') c.innerHTML = viewObsDetail(STATE.params.id);
     else if(v==='plans') c.innerHTML = viewPlansList();
     else if(v==='plan-followup') c.innerHTML = viewPlanFollowup();
-    else if(v==='plan-form') c.innerHTML = viewPlanFormTemplate();
     else if(v==='notifications') c.innerHTML = viewNotificationCenter();
     else if(v==='plan-detail') c.innerHTML = viewPlanDetail(STATE.params.id);
     else if(v==='overdue') c.innerHTML = viewOverdue();
@@ -1239,6 +1374,11 @@ function render(){
     else if(v==='leadership') c.innerHTML = viewLeadership();
     else if(v==='admin') c.innerHTML = viewAdmin();
     else if(v==='search') c.innerHTML = viewSearch(STATE.params.q||'');
+    else if(v==='qps-review') { viewQpsReviewAsync(); }
+    else if(v==='findings-live') { viewFindingsLiveAsync(); }
+    else if(v==='plans-live') { viewPlansLiveAsync(); }
+    else if(v==='round-followup') { viewRoundFollowupAsync(STATE.params.department||''); }
+    else if(v==='executive-report') { viewExecutiveReportPickerAsync(); }
     else c.innerHTML = viewDashboard();
   } catch(err){
     c.innerHTML = `<div class="card card-pad"><b>Something went wrong rendering this view.</b><div class="muted" style="margin-top:6px;font-size:11.5px;">${esc(err.message)}</div></div>`;
@@ -1437,6 +1577,10 @@ function viewRoundNew(){
         <div class="field"><label>${STATE.lang==='ar'?'رئيس الفريق':'Lead Reviewer'}</label><input id="nr-lead" placeholder="e.g. Mr. Abdulellah Al Mutairi"></div>
         <div class="field"><label>${STATE.lang==='ar'?'ممثل القسم':'Department Representative'}</label><input id="nr-rep" placeholder="e.g. Ward Charge Nurse"></div>
       </div>
+      <div class="field"><label>${STATE.lang==='ar'?'أعضاء الجولة':'Round Members'}</label>
+        <select id="nr-members" multiple size="6">${ROUND_MEMBERS.map(m=>`<option value="${m.id}">${esc(m.full_name)}${m.job_title?' — '+esc(m.job_title):''}${m.whatsapp_enabled?' 📱':''}</option>`).join('') || `<option disabled>${STATE.lang==='ar'?'لا يوجد أعضاء محفوظون — أضفهم من الإدارة ← WhatsApp':'No saved members — add them under Admin → WhatsApp Settings'}</option>`}</select>
+        <div class="muted" style="font-size:10.8px;margin-top:4px;">${STATE.lang==='ar'?'يستلم الأعضاء المفعّل لديهم واتساب تذكيرات 24 ساعة و1 ساعة تلقائيًا':'Members with WhatsApp enabled receive automatic 24-hour and 1-hour reminders'}</div>
+      </div>
       <div class="field"><label>${STATE.lang==='ar'?'ملاحظات':'Notes'}</label><textarea id="nr-notes" placeholder="Optional notes…"></textarea></div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="submitNewRound('${id}')">${STATE.lang==='ar'?'جدولة الجولة':'Schedule Round'}</button>
@@ -1445,7 +1589,7 @@ function viewRoundNew(){
     </div>
   </div>`;
 }
-function submitNewRound(id){
+async function submitNewRound(id){
   const sel = Array.from(document.getElementById('nr-depts').selectedOptions).map(o=>o.value);
   const date = document.getElementById('nr-date').value;
   const time = document.getElementById('nr-time').value;
@@ -1453,12 +1597,34 @@ function submitNewRound(id){
   const lead = document.getElementById('nr-lead').value || 'To be assigned';
   const rep = document.getElementById('nr-rep').value || 'To be assigned';
   const notes = document.getElementById('nr-notes').value;
+  const memberIds = Array.from(document.getElementById('nr-members').selectedOptions).map(o=>o.value).filter(v=>v);
   if(!sel.length || !date){ toast(STATE.lang==='ar'?'يرجى اختيار القسم والتاريخ':'Please select at least one department and a date'); return; }
+
   const r = {id, depts:sel, plannedDate:date, plannedTime:time, team, lead, rep, notes, status:'Scheduled'};
   ROUNDS.push(r);
   logAudit(STATE.lang==='ar'?'مستخدم الجودة':'Quality User', 'Round Scheduled', id, `Round scheduled for ${sel.map(deptName).join(' + ')} on ${date}. Reminder schedule, department checklist and previous-findings link created automatically.`);
   recalcAllDueDates();
-  waScheduleRoundReminders(r);
+
+  // Persist to Supabase (POST /api/rounds) so it survives a refresh and so the
+  // reminder-creation endpoint has a real round + secure_token to attach to.
+  try {
+    const res = await fetch('/api/rounds', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ id, departments: sel, planned_date: date, planned_time: time, team, lead_reviewer: lead, department_representative: rep, notes, member_ids: memberIds, actor: currentActorName() })
+    });
+    const data = await res.json();
+    if(res.ok && data.success){
+      r.secureToken = data.round.secure_token;
+      r.secureLink = data.secure_link;
+      toast((STATE.lang==='ar'?'تم حفظ الجولة في قاعدة البيانات ':'Round saved to the database: ')+id);
+      await waScheduleRoundReminders(id);
+    } else {
+      toast(STATE.lang==='ar'?`تم إنشاء الجولة محليًا فقط — فشل الحفظ في قاعدة البيانات: ${data.error||''}`:`Round created locally only — database save failed: ${data.error||''}`);
+    }
+  } catch(error){
+    toast(STATE.lang==='ar'?'تعذّر الاتصال بقاعدة البيانات لحفظ الجولة':'Could not reach the database to save the round');
+  }
+
   toast((STATE.lang==='ar'?'تم جدولة الجولة ':'Round scheduled: ')+id);
   go('round-detail',{id, tab:'prep'});
 }
@@ -2495,46 +2661,6 @@ function filterPlanFollowup(){
 }
 
 /* ================= APPROVED HOSPITAL IMPROVEMENT PLAN FORM (TEMPLATE) ================= */
-function viewPlanFormTemplate(){
-  const tpl = activeTemplate();
-  const usageCount = ATTACHMENTS.filter(a=>a.category==='plan_form').length;
-  return `
-  <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'السجلات':'Records'}</div><h1>${STATE.lang==='ar'?'نموذج الخطة التحسينية المعتمد بالمستشفى':'Approved Hospital Improvement Plan Form'}</h1>
-  <div class="sub">${STATE.lang==='ar'?'القالب الرسمي المعتمد — لا يستبدله النظام بأي نموذج آخر':'The official master template — the system never substitutes its own template'}</div></div></div>
-  <div class="grid g2" style="align-items:start;">
-    <div class="card">
-      <div class="card-head"><h3>${STATE.lang==='ar'?'بيانات النموذج':'Template Information'}</h3><span class="badge b-green">✓ ${STATE.lang==='ar'?'معتمد':'Approved'}</span></div>
-      <div class="card-pad">
-        <div class="field"><label>${STATE.lang==='ar'?'اسم النموذج':'Form Name'}</label><div>${esc(tpl.fileName)}</div></div>
-        <div class="field-row">
-          <div class="field"><label>${STATE.lang==='ar'?'حالة القالب':'Template Status'}</label><div><span class="badge b-green">${STATE.lang==='ar'?'معتمد':'Approved'}</span></div></div>
-          <div class="field"><label>${STATE.lang==='ar'?'رقم الإصدار':'Template Version'}</label><div>${tpl.version}</div></div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label>${STATE.lang==='ar'?'تاريخ السريان':'Effective Date'}</label><div>${tpl.effectiveDate? fmtDate(tpl.effectiveDate) : `<span class="muted">${STATE.lang==='ar'?'غير محددة — بانتظار تأكيد الجودة':'Not specified — to be confirmed by Quality'}</span>`}</div></div>
-          <div class="field"><label>${STATE.lang==='ar'?'آخر تحديث':'Last Updated'}</label><div>${fmtDate(tpl.lastUpdated)}</div></div>
-        </div>
-        <div class="field"><label>${STATE.lang==='ar'?'رفع بواسطة':'Uploaded By'}</label><div>${esc(tpl.uploadedBy)}</div></div>
-        ${tpl.note? `<div class="field"><label>${STATE.lang==='ar'?'ملاحظة':'Note'}</label><div class="muted" style="font-size:12px;">${esc(tpl.note)}</div></div>`:''}
-        <div class="btn-row" style="margin-top:10px;">
-          <button class="btn btn-primary" onclick="downloadApprovedForm()">⬇ ${STATE.lang==='ar'?'تنزيل النموذج المعتمد':'Download Approved Form'}</button>
-        </div>
-        <div class="muted" style="font-size:11px;margin-top:10px;">${STATE.lang==='ar'?'مستخدم في':'Currently attached to'} ${usageCount} ${STATE.lang==='ar'?'خطة تحسينية عبر النظام':'improvement plan(s) across the system'}.</div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h3>${STATE.lang==='ar'?'سجل إصدارات القالب':'Template Version History'}</h3></div>
-      <div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'الإصدار':'Version'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'رفع بواسطة':'Uploaded By'}</th><th>${STATE.lang==='ar'?'التاريخ':'Date'}</th></tr></thead><tbody>
-      ${TEMPLATE_VERSIONS.slice().reverse().map(v=>`<tr><td>${v.version}${v.active?' <span class="badge b-green">'+(STATE.lang==='ar'?'نشط':'Active')+'</span>':''}</td><td>${v.status}</td><td>${esc(v.uploadedBy)}</td><td>${fmtDate(v.lastUpdated)}</td></tr>`).join('')}
-      </tbody></table></div>
-      ${STATE.role==='quality'? `<div class="card-pad" style="border-top:1px solid var(--line-soft);">
-        <div class="muted" style="font-size:11.5px;margin-bottom:8px;">${STATE.lang==='ar'?'يمكن للجودة/الإدارة رفع إصدار جديد من النموذج المعتمد. تحتفظ الخطط الحالية بالإصدار الذي استُخدم عند تقديمها.':'Quality/Admin can upload a new approved template version. Existing plans retain the version that was used when they were submitted.'}</div>
-        <button class="btn btn-ghost btn-sm" onclick="go('admin',{tab:'template'})">⚙️ ${STATE.lang==='ar'?'إدارة إصدارات القالب':'Manage Template Versions'}</button>
-      </div>`:''}
-    </div>
-  </div>`;
-}
-
 function viewOverdue(){
   const order = {Critical:0,High:1,Moderate:2,Low:3};
   let rows = PLANS.filter(p=>!['Closed'].includes(p.status)).map(p=>({p, o:obsById(p.obsId), info:deadlineInfo(p.targetDate,p.status)})).filter(x=>x.info.overdueDays>0);
@@ -2952,7 +3078,6 @@ function viewAdmin(){
   const tabs = [
     {k:'departments', label: STATE.lang==='ar'?'الأقسام':'Departments'},
     {k:'domains', label: STATE.lang==='ar'?'المجالات السبعة وقوائم التدقيق':'Seven Domains & Checklists'},
-    {k:'template', label: STATE.lang==='ar'?'نموذج الخطة التحسينية':'Improvement Plan Template'},
     {k:'whatsapp', label: STATE.lang==='ar'?'إعدادات WhatsApp':'WhatsApp Settings'},
     {k:'whatsapp-log', label: STATE.lang==='ar'?'سجل إشعارات WhatsApp':'WhatsApp Notification Log'},
     {k:'thresholds', label: STATE.lang==='ar'?'حدود الالتزام والتصعيد':'Thresholds & Escalation'},
@@ -2964,7 +3089,6 @@ function viewAdmin(){
   <div class="tabs">${tabs.map(tb=>`<div class="tab ${tab===tb.k?'active':''}" onclick="go('admin',{tab:'${tb.k}'})">${tb.label}</div>`).join('')}</div>
   ${tab==='departments'?adminDepartments():''}
   ${tab==='domains'?adminDomains():''}
-  ${tab==='template'?adminTemplate():''}
   ${tab==='whatsapp'?adminWhatsApp():''}
   ${tab==='whatsapp-log'?adminWhatsAppLog():''}
   ${tab==='thresholds'?adminThresholds():''}
@@ -2972,55 +3096,6 @@ function viewAdmin(){
   ${tab==='audit'?adminAudit():''}
   `;
 }
-function adminTemplate(){
-  const tpl = activeTemplate();
-  return `<div class="info-banner">${STATE.lang==='ar'?'يجب ألا يُنشئ النظام نموذج خطة تحسينية خاصًا به — النموذج المرفوع من المستشفى هو القالب الرسمي الوحيد المعتمد.':'The system must not create its own improvement-plan template — the hospital-uploaded form is the only official approved template.'}</div>
-  <div class="card">
-    <div class="card-head"><h3>${STATE.lang==='ar'?'الإصدار النشط حاليًا':'Currently Active Version'}</h3><span class="badge b-green">${tpl.version}</span></div>
-    <div class="card-pad">
-      <div class="field-row">
-        <div class="field"><label>${STATE.lang==='ar'?'اسم الملف':'File Name'}</label><div>${esc(tpl.fileName)}</div></div>
-        <div class="field"><label>${STATE.lang==='ar'?'رفع بواسطة':'Uploaded By'}</label><div>${esc(tpl.uploadedBy)}</div></div>
-      </div>
-      <div class="btn-row"><button class="btn btn-ghost btn-sm" onclick="downloadApprovedForm()">⬇ ${STATE.lang==='ar'?'تنزيل':'Download'}</button></div>
-    </div>
-  </div>
-  <div class="card" style="margin-top:14px;">
-    <div class="card-head"><h3>${STATE.lang==='ar'?'رفع إصدار جديد معتمد':'Upload New Approved Template Version'}</h3></div>
-    <div class="card-pad">
-      <div class="field"><label>${STATE.lang==='ar'?'رقم الإصدار الجديد':'New Version Number'}</label><input id="tv-version" placeholder="e.g. v1.1"></div>
-      <div class="field"><label>${STATE.lang==='ar'?'الملف':'File'}</label><input type="file" id="tv-file" accept=".doc,.docx,.pdf"></div>
-      <div class="muted" style="font-size:11px;margin-bottom:10px;">${STATE.lang==='ar'?'ستحتفظ الخطط الحالية بالإصدار المستخدم وقت تقديمها؛ الخطط الجديدة تستخدم الإصدار النشط الحالي.':'Existing plans keep the version used at submission time; new plans use the current active version.'}</div>
-      <button class="btn btn-primary btn-sm" onclick="uploadNewTemplateVersion()">${STATE.lang==='ar'?'رفع وتفعيل':'Upload & Activate'}</button>
-    </div>
-  </div>
-  <div class="card" style="margin-top:14px;">
-    <div class="card-head"><h3>${STATE.lang==='ar'?'سجل الإصدارات':'Version History'}</h3></div>
-    <div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'الإصدار':'Version'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'رفع بواسطة':'Uploaded By'}</th><th>${STATE.lang==='ar'?'التاريخ':'Date'}</th><th></th></tr></thead><tbody>
-    ${TEMPLATE_VERSIONS.slice().reverse().map(v=>`<tr><td>${v.version}${v.active?' <span class="badge b-green">'+(STATE.lang==='ar'?'نشط':'Active')+'</span>':''}</td><td>${v.status}</td><td>${esc(v.uploadedBy)}</td><td>${fmtDate(v.lastUpdated)}</td>
-    <td class="right">${!v.active?`<button class="small-btn-icon" onclick="activateTemplateVersion('${v.version}')" title="Activate">✓</button>`:''}</td></tr>`).join('')}
-    </tbody></table></div>
-  </div>`;
-}
-function uploadNewTemplateVersion(){
-  const version = document.getElementById('tv-version').value.trim();
-  const fileEl = document.getElementById('tv-file');
-  const file = fileEl.files && fileEl.files[0];
-  if(!version || !file){ toast(STATE.lang==='ar'?'يرجى إدخال رقم الإصدار واختيار ملف':'Please enter a version number and choose a file'); return; }
-  TEMPLATE_VERSIONS.forEach(v=>v.active=false);
-  TEMPLATE_VERSIONS.push({version, status:'Approved', fileName:file.name, effectiveDate:todayStr(), lastUpdated:todayStr(), uploadedBy:currentActorName(), active:true, note:'Deactivate/reactivate available to Quality/Admin.'});
-  logAudit('Quality Admin','New Template Version Activated','Template',`Version ${version} ("${file.name}") uploaded and activated as the current approved improvement-plan template.`);
-  toast(STATE.lang==='ar'?'تم رفع الإصدار الجديد وتفعيله':'New version uploaded and activated');
-  go('admin',{tab:'template'});
-}
-function activateTemplateVersion(version){
-  TEMPLATE_VERSIONS.forEach(v=>v.active = (v.version===version));
-  logAudit('Quality Admin','Template Version Activated','Template',`Version ${version} set as the active approved template.`);
-  toast(STATE.lang==='ar'?'تم تفعيل الإصدار':'Version activated');
-  go('admin',{tab:'template'});
-}
-
-/* ================= WHATSAPP SETTINGS (ADMIN) ================= */
 function adminWhatsApp(){
   const cfg = WHATSAPP_CONFIG;
   const providerDef = WHATSAPP_PROVIDERS.find(p=>p.id===cfg.provider);
@@ -3076,7 +3151,7 @@ function adminWhatsApp(){
       <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'في وضع الاختبار، تُرسل كل الإشعارات التجريبية إلى هذا الرقم فقط ولا تصبح تلقائيًا رقم الإنتاج.':'While Test Mode is on, all test notifications go only to this number — it never automatically becomes the production recipient.'}</div>
       <hr class="sep">
       <div class="btn-row">
-        <button class="btn btn-primary btn-sm" onclick="waTestConnection(); render();">${STATE.lang==='ar'?'اختبار الاتصال':'Test Connection'}</button>
+        <button class="btn btn-primary btn-sm" onclick="waTestConnection()">${STATE.lang==='ar'?'اختبار الاتصال':'Test Connection'}</button>
         <button class="btn btn-primary btn-sm" onclick="waSendTestMessage(); render();">${STATE.lang==='ar'?'إرسال رسالة اختبار':'Send Test Message'}</button>
       </div>
       <hr class="sep">
@@ -3091,7 +3166,31 @@ function adminWhatsApp(){
     </div>
   </div>
 
-  <div class="grid g2">
+  <div class="card" style="margin-top:16px;">
+    <div class="card-head"><h3>${STATE.lang==='ar'?'أعضاء جولات سلامة المرضى':'Patient Safety Rounds Members'}</h3>
+      <button class="btn btn-primary btn-sm" onclick="openMemberForm()">＋ ${STATE.lang==='ar'?'إضافة عضو':'Add Member'}</button>
+    </div>
+    <div class="card-pad">
+      ${!ROUND_MEMBERS_LOADED? `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل من قاعدة البيانات...':'Loading from the database…'}</div>` :
+      ROUND_MEMBERS.length? `<div class="table-wrap"><table><thead><tr>
+        <th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'المسمى الوظيفي':'Job Title'}</th><th>${STATE.lang==='ar'?'القسم':'Department'}</th>
+        <th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp'}</th><th>${STATE.lang==='ar'?'نشط':'Active'}</th><th></th>
+      </tr></thead><tbody>
+      ${ROUND_MEMBERS.map(m=>`<tr>
+        <td>${esc(m.full_name)}</td><td>${esc(m.job_title||'—')}</td><td>${m.department==='ALL'?(STATE.lang==='ar'?'الكل':'All'):deptName(m.department)}</td>
+        <td><input style="width:140px;" value="${esc(m.mobile||'')}" placeholder="+9665XXXXXXXX" onchange="updateRoundMember('${m.id}',{mobile:this.value})"></td>
+        <td><select onchange="updateRoundMember('${m.id}',{preferred_language:this.value})"><option value="ar" ${m.preferred_language==='ar'?'selected':''}>AR</option><option value="en" ${m.preferred_language==='en'?'selected':''}>EN</option></select></td>
+        <td><input type="checkbox" ${m.whatsapp_enabled?'checked':''} onchange="updateRoundMember('${m.id}',{whatsapp_enabled:this.checked})"></td>
+        <td><input type="checkbox" ${m.active?'checked':''} onchange="updateRoundMember('${m.id}',{active:this.checked})"></td>
+        <td class="right"><button class="small-btn-icon" onclick="openMemberForm('${m.id}')" title="Edit">✎</button> <button class="small-btn-icon" onclick="deleteRoundMember('${m.id}')" title="Delete">🗑️</button></td>
+      </tr>`).join('')}
+      </tbody></table></div>` :
+      `<div class="empty"><div class="eic">👥</div>${STATE.lang==='ar'?'لا يوجد أعضاء محفوظون بعد.':'No members saved yet.'}<div class="btn-row" style="justify-content:center;margin-top:12px;"><button class="btn btn-ghost btn-sm" onclick="importDefaultRoster()">${STATE.lang==='ar'?'استيراد القائمة الافتراضية':'Import default roster'}</button></div></div>`}
+      <div class="muted" style="font-size:10.6px;margin-top:10px;">${STATE.lang==='ar'?'يُحفظ كل تغيير مباشرة في قاعدة بيانات Supabase — لا تُفقد البيانات عند تحديث الصفحة أو الفتح من جهاز آخر.':'Every change is saved directly to Supabase — nothing is lost on refresh or when opened from another device.'}</div>
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-top:16px;">
     <div class="card">
       <div class="card-head"><h3>${STATE.lang==='ar'?'قوالب WhatsApp':'WhatsApp Templates'}</h3></div>
       <div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'القالب':'Template'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th></tr></thead><tbody>
@@ -3099,10 +3198,8 @@ function adminWhatsApp(){
       </tbody></table></div>
     </div>
     <div class="card">
-      <div class="card-head"><h3>${STATE.lang==='ar'?'أعضاء الجولة وإشعارات WhatsApp':'Round Members — WhatsApp Notifications'}</h3></div>
-      <div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'مفعّل':'Enabled'}</th></tr></thead><tbody>
-      ${ROUND_MEMBERS.map((m,i)=>`<tr><td>${esc(m.name)}</td><td><input style="width:130px;" value="${esc(m.mobile)}" placeholder="+9665XXXXXXXX" onchange="waSetMemberMobile(${i}, this.value)"></td><td><input type="checkbox" ${m.waEnabled?'checked':''} onchange="waSetMemberEnabled(${i}, this.checked)"></td></tr>`).join('')}
-      </tbody></table></div>
+      <div class="card-head"><h3>${STATE.lang==='ar'?'من يستلم تذكيرات هذه الجولة':'Who Receives Round Reminders'}</h3></div>
+      <div class="card-pad muted" style="font-size:11.8px;">${STATE.lang==='ar'?'يستلم التذكيرات فقط الأعضاء المفعّل لديهم واتساب والمرتبطون بالجولة تحديدًا عند الجدولة. أدر التفعيل والجوال من الجدول على اليسار.':'Only members with WhatsApp enabled, and who are linked to a specific round at scheduling time, receive its reminders. Manage enablement and mobile numbers in the table to the left.'}</div>
     </div>
   </div>`;
 }
@@ -3124,8 +3221,39 @@ function waSaveTestNumber(){
   toast(STATE.lang==='ar'?'تم حفظ الرقم':'Number saved');
   go('admin',{tab:'whatsapp'});
 }
-function waSetMemberMobile(i,v){ ROUND_MEMBERS[i].mobile = v; logAudit(currentActorName(),'Round Member Mobile Updated','WhatsApp', `Mobile number updated for ${ROUND_MEMBERS[i].name} (masked).`); }
-function waSetMemberEnabled(i,v){ ROUND_MEMBERS[i].waEnabled = v; logAudit(currentActorName(),'Round Member Notification '+(v?'Enabled':'Disabled'),'WhatsApp', `WhatsApp notifications ${v?'enabled':'disabled'} for ${ROUND_MEMBERS[i].name}.`); }
+/* ---- Member add/edit modal ---- */
+function openMemberForm(id){
+  const m = id ? ROUND_MEMBERS.find(x=>String(x.id)===String(id)) : null;
+  openModal(
+    m ? (STATE.lang==='ar'?'تعديل عضو':'Edit Member') : (STATE.lang==='ar'?'إضافة عضو':'Add Member'),
+    `<div class="field"><label>${STATE.lang==='ar'?'الاسم الكامل':'Full Name'} <span class="req">*</span></label><input id="mf-name" value="${m?esc(m.full_name):''}" placeholder="e.g. Dr. Mona Al Anazi"></div>
+     <div class="field"><label>${STATE.lang==='ar'?'المسمى الوظيفي':'Job Title'}</label><input id="mf-title" value="${m?esc(m.job_title||''):''}" placeholder="e.g. Medical Administration Quality Coordinator"></div>
+     <div class="field"><label>${STATE.lang==='ar'?'القسم':'Department'}</label>
+       <select id="mf-dept"><option value="ALL" ${(!m||m.department==='ALL')?'selected':''}>${STATE.lang==='ar'?'كل الأقسام':'All Departments'}</option>${DEPARTMENTS.map(d=>`<option value="${d.id}" ${m&&m.department===d.id?'selected':''}>${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select></div>
+     <div class="field"><label>${STATE.lang==='ar'?'رقم الجوال (واتساب)':'Mobile / WhatsApp Number'}</label><input id="mf-mobile" value="${m?esc(m.mobile||''):''}" placeholder="+9665XXXXXXXX"></div>
+     <div class="field-row">
+       <div class="field"><label>${STATE.lang==='ar'?'اللغة المفضلة':'Preferred Language'}</label><select id="mf-lang"><option value="ar" ${(!m||m.preferred_language==='ar')?'selected':''}>العربية</option><option value="en" ${m&&m.preferred_language==='en'?'selected':''}>English</option></select></div>
+       <div class="field"><label>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp Enabled'}</label><select id="mf-wa"><option value="false" ${(!m||!m.whatsapp_enabled)?'selected':''}>${STATE.lang==='ar'?'لا':'No'}</option><option value="true" ${m&&m.whatsapp_enabled?'selected':''}>${STATE.lang==='ar'?'نعم':'Yes'}</option></select></div>
+     </div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button>
+     <button class="btn btn-primary" onclick="submitMemberForm(${m?`'${m.id}'`:'null'})">${STATE.lang==='ar'?'حفظ':'Save'}</button>`
+  );
+}
+async function submitMemberForm(id){
+  const full_name = document.getElementById('mf-name').value.trim();
+  if(!full_name){ toast(STATE.lang==='ar'?'الاسم مطلوب':'Name is required'); return; }
+  const payload = {
+    full_name,
+    job_title: document.getElementById('mf-title').value.trim(),
+    department: document.getElementById('mf-dept').value,
+    mobile: document.getElementById('mf-mobile').value.trim(),
+    preferred_language: document.getElementById('mf-lang').value,
+    whatsapp_enabled: document.getElementById('mf-wa').value==='true',
+  };
+  if(id){ await updateRoundMember(id, payload); } else { await addRoundMember(payload); }
+  closeModal();
+  go('admin',{tab:'whatsapp'});
+}
 
 function adminWhatsAppLog(){
   return `<div class="card">
@@ -3268,9 +3396,657 @@ function viewSearch(q){
   </div>`;
 }
 
+/* ================================================================
+   SECOND PASS — REAL SERVER-BACKED WORKFLOW
+   Everything below talks to the new /api/* endpoints (Supabase-backed) and
+   is kept deliberately separate from the ROUNDS/OBSERVATIONS/PLANS demo
+   arrays used elsewhere in this file, so the two data sources are never
+   silently mixed. This is the actual operational workflow: secure no-login
+   public pages (round + corrective plan), QPS Observation Review, and
+   department-grouped Findings/Plans.
+   ================================================================ */
+
+/* ---------------- Path-based routing for secure public links ---------------- */
+function isPublicRoundPath(){ return location.pathname.startsWith('/round/'); }
+function isPublicPlanPath(){ return location.pathname.startsWith('/plan/'); }
+function publicToken(){ return location.pathname.split('/').filter(Boolean)[1] || ''; }
+function hidePublicChrome(){
+  const sb = document.getElementById('sidebar'); if(sb) sb.style.display='none';
+  const tb = document.getElementById('topbar'); if(tb) tb.style.display='none';
+  document.getElementById('main').style.width='100%';
+}
+function fileToBase64(file){
+  return new Promise((resolve,reject)=>{ const r = new FileReader(); r.onload=()=>resolve(r.result.split(',')[1]); r.onerror=reject; r.readAsDataURL(file); });
+}
+
+/* ---------------- Public round page: /round/:token ---------------- */
+let PUBLIC_ROUND_STATE = { round:null, participants:[], selectedMemberId:'', submitted:[], previousFindings:[] };
+async function bootPublicRound(){
+  hidePublicChrome();
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    const res = await fetch('/api/public-round?token='+encodeURIComponent(publicToken()));
+    const data = await res.json();
+    if(!res.ok || !data.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(data.error||(STATE.lang==='ar'?'الرابط غير صالح أو منتهي.':'This link is invalid or has expired.'))}</b></div>`; return; }
+    PUBLIC_ROUND_STATE.round = data.round;
+    PUBLIC_ROUND_STATE.participants = data.participants;
+    const perDept = await Promise.all(data.round.departments.map(d=>fetchPreviousFindings(d, data.round.id)));
+    PUBLIC_ROUND_STATE.previousFindings = perDept.flat();
+    renderPublicRound();
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل بيانات الجولة':'Could not load this round'}</b></div>`;
+  }
+}
+function renderPublicRound(){
+  const { round, participants, selectedMemberId, submitted, previousFindings } = PUBLIC_ROUND_STATE;
+  const content = document.getElementById('content');
+  const me = participants.find(p=>String(p.id)===String(selectedMemberId));
+  content.innerHTML = `
+  <div style="max-width:760px;margin:24px auto;padding:0 16px;">
+    <div class="pagehead"><div><h1>${STATE.lang==='ar'?'جولة سلامة المرضى':'Patient Safety Round'}</h1>
+      <div class="sub">${esc(round.id)} · ${round.departments.map(deptName).join(' + ')} · ${fmtDate(round.planned_date)} · ${round.planned_time}</div></div></div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head"><h3>${STATE.lang==='ar'?'متابعة ملاحظات الجولة السابقة':'Previous Round Follow-up'}</h3><span class="hint">${(previousFindings||[]).length}</span></div>
+      <div class="card-pad">${previousFollowUpTableHtml(previousFindings||[])}</div>
+    </div>
+    ${!me? `
+      <div class="card card-pad">
+        <div class="field"><label>${STATE.lang==='ar'?'أنا:':'I am:'}</label>
+          <select id="pr-member" onchange="selectPublicMember(this.value)">
+            <option value="">${STATE.lang==='ar'?'اختر اسمك من القائمة':'Select your name'}</option>
+            ${participants.map(p=>`<option value="${p.id}">${esc(p.full_name)}${p.job_title?' — '+esc(p.job_title):''}</option>`).join('')}
+          </select>
+        </div>
+        ${!participants.length? `<div class="muted" style="font-size:11.5px;">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة.':'No members are linked to this round yet.'}</div>`:''}
+      </div>` : `
+      <div class="side-note" style="margin-bottom:16px;">${STATE.lang==='ar'?'مسجّل الدخول باسم':'Identified as'}: <b>${esc(me.full_name)}</b>${me.job_title?' — '+esc(me.job_title):''} <a class="tbl-link" style="margin-inline-start:10px;" onclick="selectPublicMember('')">${STATE.lang==='ar'?'(ليس أنا)':'(not me)'}</a></div>
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-head"><h3>${STATE.lang==='ar'?'إضافة ملاحظة':'Add Observation'}</h3></div>
+        <div class="card-pad">
+          <div class="field-row">
+            <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><select id="pr-domain" onchange="refreshPublicItems()">${DOMAINS.filter(d=>round.departments.some(dep=>domainApplies(d,dep))).map(d=>`<option value="${d.id}">${d.sn}. ${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select></div>
+            <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><select id="pr-item"></select></div>
+          </div>
+          <div class="field"><label>${STATE.lang==='ar'?'القسم':'Department'}</label><select id="pr-dept">${round.departments.map(d=>`<option value="${d}">${deptName(d)}</option>`).join('')}</select></div>
+          <div class="field"><label>${STATE.lang==='ar'?'الموقع':'Location'}</label><input id="pr-location"></div>
+          <div class="field"><label>${STATE.lang==='ar'?'الملاحظة':'Observation'} <span class="req">*</span></label><textarea id="pr-obs"></textarea></div>
+          <div class="field"><label>${STATE.lang==='ar'?'الإجراء الفوري المتخذ':'Immediate Action Taken'}</label><textarea id="pr-immediate"></textarea></div>
+          <div class="field"><label>${STATE.lang==='ar'?'الإجراء المقترح':'Suggested Action'}</label><textarea id="pr-suggested"></textarea></div>
+          <div class="field"><label>${STATE.lang==='ar'?'تعليقات':'Comments'}</label><textarea id="pr-comments"></textarea></div>
+          <button class="btn btn-primary" onclick="submitPublicObservation()">${STATE.lang==='ar'?'إرسال الملاحظة':'Submit Observation'}</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>${STATE.lang==='ar'?'ملاحظاتي في هذه الجلسة':'My Observations This Session'}</h3></div>
+        <div class="card-pad">
+          ${submitted.length? submitted.map(o=>`<div style="padding:8px 0;border-bottom:1px solid var(--line-soft);"><b>${domainName(o.domain)}</b> — ${esc(o.observation_text)} <span class="badge b-blue" style="margin-inline-start:6px;">${STATE.lang==='ar'?'أُرسلت لمراجعة الجودة':'Submitted for QPS Review'}</span></div>`).join('') : `<div class="muted">${STATE.lang==='ar'?'لم تُرسل أي ملاحظة بعد':'No observations submitted yet'}</div>`}
+        </div>
+      </div>
+    `}
+  </div>`;
+  if(me) refreshPublicItems();
+}
+function selectPublicMember(id){ PUBLIC_ROUND_STATE.selectedMemberId = id||''; renderPublicRound(); }
+function refreshPublicItems(){
+  const el = document.getElementById('pr-domain'); if(!el) return;
+  const domain = DOMAINS.find(d=>d.id===el.value);
+  document.getElementById('pr-item').innerHTML = domain.items.map(i=>`<option value="${i.id}">${STATE.lang==='ar'?i.ar:i.en}</option>`).join('');
+}
+async function submitPublicObservation(){
+  const obsText = document.getElementById('pr-obs').value.trim();
+  if(!obsText){ toast(STATE.lang==='ar'?'يرجى إدخال نص الملاحظة':'Please enter the observation text'); return; }
+  const payload = {
+    token: publicToken(), member_id: PUBLIC_ROUND_STATE.selectedMemberId,
+    department: document.getElementById('pr-dept').value,
+    domain: document.getElementById('pr-domain').value,
+    checklist_item: document.getElementById('pr-item').value,
+    observation_text: obsText,
+    location: document.getElementById('pr-location').value,
+    immediate_action: document.getElementById('pr-immediate').value,
+    suggested_action: document.getElementById('pr-suggested').value,
+    comments: document.getElementById('pr-comments').value,
+  };
+  try{
+    const res = await fetch('/api/public-round', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+    const data = await res.json();
+    if(!res.ok || !data.success){ toast(data.error||(STATE.lang==='ar'?'فشل الإرسال':'Failed to submit')); return; }
+    PUBLIC_ROUND_STATE.submitted.unshift(data.observation);
+    ['pr-obs','pr-location','pr-immediate','pr-suggested','pr-comments'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+    toast(STATE.lang==='ar'?'تم إرسال الملاحظة لمراجعة الجودة':'Observation submitted for QPS review');
+    renderPublicRound();
+  } catch(error){ toast(STATE.lang==='ar'?'تعذّر الإرسال':'Could not submit'); }
+}
+
+/* ---------------- Public corrective-plan page: /plan/:token ---------------- */
+let PUBLIC_PLAN_STATE = { plan:null, finding:null, evidence:[] };
+async function bootPublicPlan(){
+  hidePublicChrome();
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    const res = await fetch('/api/public-plan?token='+encodeURIComponent(publicToken()));
+    const data = await res.json();
+    if(!res.ok || !data.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(data.error||(STATE.lang==='ar'?'الرابط غير صالح أو منتهي.':'This link is invalid or has expired.'))}</b></div>`; return; }
+    PUBLIC_PLAN_STATE.plan = data.plan; PUBLIC_PLAN_STATE.finding = data.finding; PUBLIC_PLAN_STATE.evidence = data.evidence || [];
+    renderPublicPlan();
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل بيانات الخطة':'Could not load this plan'}</b></div>`;
+  }
+}
+function renderPublicPlan(){
+  const { plan, finding, evidence } = PUBLIC_PLAN_STATE;
+  const content = document.getElementById('content');
+  const days = Math.round((parseD(plan.due_date) - parseD(todayStr())) / 86400000);
+  content.innerHTML = `
+  <div style="max-width:760px;margin:24px auto;padding:0 16px;">
+    <div class="pagehead"><div><h1>${STATE.lang==='ar'?'الخطة التصحيحية':'Corrective Plan'}</h1>
+      <div class="sub">${esc(finding.round_id)} · ${deptName(finding.department)}</div></div><span class="badge b-blue">${esc(plan.status)}</span></div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head"><h3>${STATE.lang==='ar'?'الملاحظة المعتمدة':'Approved Finding'}</h3></div>
+      <div class="card-pad">
+        <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><div>${domainName(finding.domain)}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'مستوى الخطورة':'Risk Level'}</label><div>${riskBadge(finding.risk_level)}</div></div>
+        <div class="field-row">
+          <div class="field"><label>${STATE.lang==='ar'?'تاريخ البدء':'Start Date'}</label><div>${fmtDate(plan.start_date)}</div></div>
+          <div class="field"><label>${STATE.lang==='ar'?'الموعد النهائي':'Due Date'}</label><div>${fmtDate(plan.due_date)}</div></div>
+        </div>
+        <div class="field"><label>${STATE.lang==='ar'?'الأيام المتبقية':'Days Remaining'}</label><div>${days>=0?days:(STATE.lang==='ar'?`متأخرة ${Math.abs(days)} يوم`:`${Math.abs(days)} day(s) overdue`)}</div></div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head"><h3>${STATE.lang==='ar'?'الخطة التحسينية الرسمية':'Official Improvement Plan'}</h3></div>
+      <div class="card-pad">
+        <button class="btn btn-ghost" onclick="downloadApprovedForm()">⬇ ${STATE.lang==='ar'?'تحميل نموذج الخطة التحسينية المعتمد':'Download Official Improvement Plan Template'}</button>
+        ${plan.plan_file_url? `<div class="side-note" style="margin-top:12px;">✓ ${esc(plan.plan_file_name)} (v${plan.plan_version}) — <a href="${plan.plan_file_url}" download="${esc(plan.plan_file_name)}">${STATE.lang==='ar'?'تنزيل':'Download'}</a></div>` : `<div class="esc-note" style="margin-top:12px;">${STATE.lang==='ar'?'لم يتم رفع الخطة المكتملة بعد':'Completed plan not uploaded yet'}</div>`}
+        <div class="field" style="margin-top:12px;"><label>${STATE.lang==='ar'?'اسمك':'Your Name'}</label><input id="pp-name" placeholder="e.g. Ahmed Al Shammari"></div>
+        <div class="field"><label>${STATE.lang==='ar'?'رفع الخطة المكتملة':'Upload Completed Plan'}</label><input type="file" id="pp-plan-file" accept=".pdf,.doc,.docx"></div>
+        <button class="btn btn-primary btn-sm" onclick="uploadPublicPlan()">⬆ ${STATE.lang==='ar'?'رفع':'Upload'}</button>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-head"><h3>${STATE.lang==='ar'?'الأدلة الداعمة':'Supporting Evidence'}</h3></div>
+      <div class="card-pad">
+        ${evidence.length? evidence.map(e=>`<div style="padding:6px 0;">📎 ${esc(e.file_name)} — <a href="${e.file_url}" download="${esc(e.file_name)}">${STATE.lang==='ar'?'تنزيل':'Download'}</a></div>`).join('') : `<div class="muted">${STATE.lang==='ar'?'لا توجد أدلة مرفوعة بعد':'No evidence uploaded yet'}</div>`}
+        <div class="field" style="margin-top:10px;"><input type="file" id="pp-evidence-file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"></div>
+        <button class="btn btn-ghost btn-sm" onclick="uploadPublicEvidence()">+ ${STATE.lang==='ar'?'إضافة دليل':'Add Evidence'}</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>${STATE.lang==='ar'?'تعليق':'Comment'}</h3></div>
+      <div class="card-pad">
+        <textarea id="pp-comment" placeholder="${STATE.lang==='ar'?'تعليق اختياري قبل الإرسال...':'Optional comment before submitting…'}">${esc(plan.plan_comment||'')}</textarea>
+        <button class="btn btn-primary" style="margin-top:10px;" onclick="submitPublicPlan()">${STATE.lang==='ar'?'إرسال للجودة':'Submit for QPS Review'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function uploadPublicPlan(){
+  const f = document.getElementById('pp-plan-file').files[0];
+  if(!f){ toast(STATE.lang==='ar'?'اختر ملفًا':'Choose a file'); return; }
+  const name = document.getElementById('pp-name').value.trim() || 'Department';
+  const b64 = await fileToBase64(f);
+  const res = await fetch('/api/public-plan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:publicToken(), action:'upload_plan', uploaded_by:name, file_name:f.name, file_type:f.type, file_base64:b64})});
+  const data = await res.json();
+  if(!res.ok || !data.success){ toast(data.error||'Upload failed'); return; }
+  Object.assign(PUBLIC_PLAN_STATE.plan, data.plan);
+  toast(STATE.lang==='ar'?'تم رفع الخطة':'Plan uploaded');
+  renderPublicPlan();
+}
+async function uploadPublicEvidence(){
+  const f = document.getElementById('pp-evidence-file').files[0];
+  if(!f){ toast(STATE.lang==='ar'?'اختر ملفًا':'Choose a file'); return; }
+  const name = document.getElementById('pp-name').value.trim() || 'Department';
+  const b64 = await fileToBase64(f);
+  const res = await fetch('/api/public-plan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:publicToken(), action:'upload_evidence', uploaded_by:name, file_name:f.name, file_type:f.type, file_base64:b64})});
+  const data = await res.json();
+  if(!res.ok || !data.success){ toast(data.error||'Upload failed'); return; }
+  PUBLIC_PLAN_STATE.evidence.unshift(data.evidence);
+  toast(STATE.lang==='ar'?'تم رفع الدليل':'Evidence uploaded');
+  renderPublicPlan();
+}
+async function submitPublicPlan(){
+  const name = document.getElementById('pp-name').value.trim() || 'Department';
+  const comment = document.getElementById('pp-comment').value;
+  const res = await fetch('/api/public-plan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:publicToken(), action:'submit', uploaded_by:name, comment})});
+  const data = await res.json();
+  if(!res.ok || !data.success){ toast(data.error||'Submit failed'); return; }
+  Object.assign(PUBLIC_PLAN_STATE.plan, data.plan);
+  toast(STATE.lang==='ar'?'تم الإرسال لمراجعة الجودة':'Submitted for QPS review');
+  renderPublicPlan();
+}
+
+/* ---------------- QPS Observation Review (internal, real data) ---------------- */
+async function viewQpsReviewAsync(){
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    const res = await fetch('/api/observations?status='+encodeURIComponent('Submitted for QPS Review'));
+    const data = await res.json();
+    const rows = (data.success? data.observations : []) || [];
+    const byDept = {};
+    rows.forEach(o=>{ (byDept[o.department]=byDept[o.department]||[]).push(o); });
+    content.innerHTML = `
+    <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${STATE.lang==='ar'?'مراجعة ملاحظات الجولة':'QPS Observation Review'}</h1><div class="sub">${rows.length} ${STATE.lang==='ar'?'بانتظار المراجعة':'awaiting review'}</div></div>
+    <button class="btn btn-ghost btn-sm" onclick="go('qps-review')">↻ ${STATE.lang==='ar'?'تحديث':'Refresh'}</button></div>
+    ${!rows.length? `<div class="card"><div class="empty"><div class="eic">✅</div>${STATE.lang==='ar'?'لا توجد ملاحظات بانتظار المراجعة':'No observations awaiting review'}</div></div>` :
+    Object.keys(byDept).sort().map(dept=>`
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-head"><h3>${deptName(dept)}</h3><span class="hint">${byDept[dept].length} ${STATE.lang==='ar'?'ملاحظة':'observation(s)'}</span></div>
+        <div class="card-pad">
+        ${byDept[dept].map(o=>`
+          <div class="checklist-item">
+            <div class="ci-top">
+              <div><div class="ci-title">${domainName(o.domain)} — ${esc(o.checklist_item)}</div>
+                <div class="muted" style="font-size:11.3px;margin-top:3px;">${esc(o.observation_text)}</div>
+                <div class="muted" style="font-size:10.8px;margin-top:4px;">${STATE.lang==='ar'?'مقدّم من':'Submitted by'} ${esc(o.member_name||'—')} (${esc(o.member_role||'—')}) · ${fmtDateTime(new Date(o.submitted_at))}</div>
+              </div>
+            </div>
+            <div class="btn-row" style="margin-top:10px;">
+              <button class="btn btn-primary btn-sm" onclick="openApproveObsModal('${o.id}')">✓ ${STATE.lang==='ar'?'اعتماد':'Approve'}</button>
+              <button class="btn btn-ghost btn-sm" onclick="openClarifyObsModal('${o.id}')">? ${STATE.lang==='ar'?'طلب توضيح':'Request Clarification'}</button>
+              <button class="btn btn-danger btn-sm" onclick="openRejectObsModal('${o.id}')">✕ ${STATE.lang==='ar'?'رفض':'Reject'}</button>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>`).join('')}`;
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الملاحظات':'Could not load observations'}</b></div>`;
+  }
+}
+function openApproveObsModal(id){
+  openModal(
+    STATE.lang==='ar'?'اعتماد الملاحظة':'Approve Observation',
+    `<div class="field"><label>${STATE.lang==='ar'?'مستوى الخطورة':'Risk Level'} <span class="req">*</span></label><select id="qa-risk">${RISKS.map(r=>`<option value="${r}">${riskLabel(r)}</option>`).join('')}</select></div>
+     <div class="field"><label>${STATE.lang==='ar'?'القسم المسؤول':'Responsible Department'}</label><select id="qa-dept">${DEPARTMENTS.map(d=>`<option value="${d.id}">${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select></div>
+     <div class="field"><label>${STATE.lang==='ar'?'الشخص المسؤول (نص)':'Responsible Person (text)'}</label><input id="qa-person" placeholder="e.g. Ward Charge Nurse"></div>
+     <div class="field"><label>${STATE.lang==='ar'?'العضو المسؤول (لإرسال واتساب فعلي)':'Responsible Member (for real WhatsApp)'}</label>
+       <select id="qa-member"><option value="">${STATE.lang==='ar'?'بدون — لن يُرسل واتساب':'None — no WhatsApp will be sent'}</option>${ROUND_MEMBERS.map(m=>`<option value="${m.id}">${esc(m.full_name)}${m.mobile?' 📱':' (no mobile)'}</option>`).join('')}</select></div>
+     <div class="field"><label><input type="checkbox" id="qa-corrective" checked> ${STATE.lang==='ar'?'مطلوبة خطة تصحيحية':'Corrective Plan Required'}</label></div>
+     <div class="field"><label>${STATE.lang==='ar'?'ملاحظات':'Notes'}</label><textarea id="qa-notes"></textarea></div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button>
+     <button class="btn btn-primary" onclick="decideObservation('${id}','approve')">${STATE.lang==='ar'?'اعتماد':'Approve'}</button>`
+  );
+}
+function openRejectObsModal(id){
+  openModal(STATE.lang==='ar'?'رفض الملاحظة':'Reject Observation',
+    `<div class="field"><label>${STATE.lang==='ar'?'السبب':'Reason'} <span class="req">*</span></label><textarea id="qa-notes"></textarea></div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button class="btn btn-danger" onclick="decideObservation('${id}','reject')">${STATE.lang==='ar'?'رفض':'Reject'}</button>`);
+}
+function openClarifyObsModal(id){
+  openModal(STATE.lang==='ar'?'طلب توضيح':'Request Clarification',
+    `<div class="field"><label>${STATE.lang==='ar'?'ما المطلوب توضيحه؟':'What needs clarification?'} <span class="req">*</span></label><textarea id="qa-notes"></textarea></div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button class="btn btn-primary" onclick="decideObservation('${id}','clarify')">${STATE.lang==='ar'?'إرسال':'Send'}</button>`);
+}
+async function decideObservation(id, decision){
+  const notesEl = document.getElementById('qa-notes');
+  const notes = notesEl ? notesEl.value.trim() : '';
+  if((decision==='reject'||decision==='clarify') && !notes){ toast(STATE.lang==='ar'?'السبب مطلوب':'A reason is required'); return; }
+  const payload = { decision, qps_reviewer: currentActorName(), notes };
+  if(decision==='approve'){
+    payload.risk_level = document.getElementById('qa-risk').value;
+    payload.responsible_department = document.getElementById('qa-dept').value;
+    payload.responsible_person = document.getElementById('qa-person').value;
+    payload.responsible_member_id = document.getElementById('qa-member').value || null;
+    payload.corrective_required = document.getElementById('qa-corrective').checked;
+  }
+  try{
+    const res = await fetch('/api/observations?id='+encodeURIComponent(id), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if(!res.ok || !data.success){ toast(data.error||'Failed'); return; }
+    closeModal();
+    if(decision==='approve'){
+      let msg = STATE.lang==='ar'?'تم اعتماد الملاحظة وإنشاء الملاحظة الرسمية':'Observation approved and finding created';
+      if(data.recurring) msg += STATE.lang==='ar'?' — ملاحظة متكررة':' — recurring finding';
+      if(data.plan){
+        msg += data.whatsapp && data.whatsapp.success
+          ? (STATE.lang==='ar'?' — تم إرسال طلب خطة تصحيحية فعلي عبر واتساب':' — real WhatsApp corrective-plan request sent')
+          : (STATE.lang==='ar'?` — لم يُرسل واتساب: ${data.whatsapp?data.whatsapp.error:''}`:` — WhatsApp not sent: ${data.whatsapp?data.whatsapp.error:''}`);
+      }
+      toast(msg);
+    } else {
+      toast(STATE.lang==='ar'?'تم تسجيل القرار':'Decision recorded');
+    }
+    viewQpsReviewAsync();
+  } catch(error){ toast(STATE.lang==='ar'?'تعذّر الإرسال':'Request failed'); }
+}
+
+/* ---------------- Findings by Department (internal, real data) ---------------- */
+async function viewFindingsLiveAsync(){
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    const res = await fetch('/api/findings');
+    const data = await res.json();
+    const rows = (data.success? data.findings : []) || [];
+    const byDept = {};
+    rows.forEach(f=>{ (byDept[f.department]=byDept[f.department]||[]).push(f); });
+    content.innerHTML = `
+    <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${STATE.lang==='ar'?'الملاحظات حسب القسم':'Findings by Department'}</h1><div class="sub">${rows.length} ${STATE.lang==='ar'?'ملاحظة معتمدة':'approved finding(s)'}</div></div></div>
+    ${!rows.length? `<div class="card"><div class="empty">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة بعد':'No approved findings yet'}</div></div>` :
+    Object.keys(byDept).sort().map(dept=>`
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-head"><h3>${deptName(dept)}</h3><span class="hint">${byDept[dept].length}</span></div>
+        <div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'المجال':'Domain'}</th><th>${STATE.lang==='ar'?'البند':'Item'}</th><th>${STATE.lang==='ar'?'الخطورة':'Risk'}</th><th>${STATE.lang==='ar'?'متكررة':'Recurring'}</th><th>${STATE.lang==='ar'?'حالة الخطة':'Plan Status'}</th></tr></thead><tbody>
+        ${byDept[dept].map(f=>`<tr ${f.plan?`class="tbl-link" onclick="viewPlanLiveDetailAsync('${f.plan.id}')"`:''}><td>${domainName(f.domain)}</td><td>${esc(f.checklist_item||'—')}</td><td>${riskBadge(f.risk_level)}</td><td>${f.is_recurring?'<span class="badge b-orange">🔁</span>':'—'}</td><td>${f.plan?`<span class="badge b-blue">${esc(f.plan.status)}</span>`:(f.corrective_required?'<span class="badge b-grey">—</span>':(STATE.lang==='ar'?'غير مطلوبة':'Not required'))}</td></tr>`).join('')}
+        </tbody></table></div>
+      </div>`).join('')}`;
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الملاحظات':'Could not load findings'}</b></div>`;
+  }
+}
+
+/* ---------------- Corrective Plans — internal Quality review (real data) ---------------- */
+async function viewPlansLiveAsync(){
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    const res = await fetch('/api/plans');
+    const data = await res.json();
+    const rows = (data.success? data.plans : []) || [];
+    content.innerHTML = `
+    <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${STATE.lang==='ar'?'الخطط التصحيحية':'Corrective Plans'}</h1><div class="sub">${rows.length} ${STATE.lang==='ar'?'خطة':'plan(s)'}</div></div></div>
+    <div class="card"><div class="table-wrap"><table><thead><tr><th>ID</th><th>${STATE.lang==='ar'?'البدء':'Start'}</th><th>${STATE.lang==='ar'?'الاستحقاق':'Due'}</th><th>${STATE.lang==='ar'?'النموذج':'Form'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th></th></tr></thead><tbody>
+    ${rows.map(p=>`<tr><td>${p.id}</td><td>${fmtDate(p.start_date)}</td><td>${fmtDate(p.due_date)}</td><td>${p.plan_file_url?'<span class="badge b-green">✓</span>':'<span class="badge b-red">⚠</span>'}</td><td><span class="badge b-blue">${esc(p.status)}</span></td>
+      <td class="right"><button class="btn btn-ghost btn-sm" onclick="viewPlanLiveDetailAsync('${p.id}')">${STATE.lang==='ar'?'فتح':'Open'}</button></td></tr>`).join('')||`<tr><td colspan="6"><div class="empty">${STATE.lang==='ar'?'لا توجد خطط بعد':'No plans yet'}</div></td></tr>`}
+    </tbody></table></div></div>`;
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الخطط':'Could not load plans'}</b></div>`;
+  }
+}
+async function viewPlanLiveDetailAsync(id){
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  const res = await fetch('/api/plans?id='+encodeURIComponent(id));
+  const data = await res.json();
+  if(!data.success || !data.plan){ content.innerHTML = `<div class="card card-pad"><b>Not found</b></div>`; return; }
+  const plan = data.plan, finding = data.finding, evidence = data.evidence || [];
+  const isImage = (name)=> /\.(jpe?g|png|gif|webp)$/i.test(name||'');
+  content.innerHTML = `
+  <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'} / ${finding?deptName(finding.department):''} / ${esc(plan.id)}</div><h1>${STATE.lang==='ar'?'مراجعة الخطة والأدلة':'Plan & Evidence Review'}</h1>
+  <div class="sub">${finding?`${STATE.lang==='ar'?'رقم الجولة':'Round'}: ${esc(finding.round_id)} · ${STATE.lang==='ar'?'رقم الملاحظة':'Finding ID'}: ${esc(finding.id)}`:''}</div></div>
+  <button class="btn btn-ghost btn-sm" onclick="go('plans-live')">← ${STATE.lang==='ar'?'رجوع':'Back'}</button></div>
+
+  ${finding? `<div class="card" style="margin-bottom:16px;">
+    <div class="card-head"><h3>${STATE.lang==='ar'?'الملاحظة':'Finding'}</h3><span class="badge b-blue">${esc(plan.status)}</span></div>
+    <div class="card-pad">
+      <div class="field-row">
+        <div class="field"><label>${STATE.lang==='ar'?'القسم':'Department'}</label><div>${deptName(finding.department)}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><div>${domainName(finding.domain)}</div></div>
+      </div>
+      <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><div>${esc(finding.checklist_item||'—')}</div></div>
+      <div class="field-row">
+        <div class="field"><label>${STATE.lang==='ar'?'الخطورة':'Risk'}</label><div>${riskBadge(finding.risk_level)}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'متكررة':'Recurring'}</label><div>${finding.is_recurring?'<span class="badge b-orange">🔁 Yes</span>':'No'}</div></div>
+      </div>
+    </div>
+  </div>`:''}
+
+  <div class="grid g2">
+    <div>
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-head"><h3>${STATE.lang==='ar'?'الخطة التصحيحية':'Corrective Plan'}</h3></div>
+        <div class="card-pad">
+          <div class="field-row"><div class="field"><label>${STATE.lang==='ar'?'البدء':'Start'}</label><div>${fmtDate(plan.start_date)}</div></div><div class="field"><label>${STATE.lang==='ar'?'الاستحقاق':'Due'}</label><div>${fmtDate(plan.due_date)}</div></div></div>
+          ${plan.plan_file_url? `
+            <div class="side-note" style="margin-bottom:8px;">
+              <div style="font-weight:700;">📎 ${esc(plan.plan_file_name)}</div>
+              <div class="muted" style="font-size:11px;margin-top:3px;">
+                ${STATE.lang==='ar'?'النوع':'Type'}: ${esc((plan.plan_file_name||'').split('.').pop().toUpperCase())} ·
+                ${STATE.lang==='ar'?'رفع بواسطة':'Uploaded by'}: ${esc(plan.plan_uploaded_by||'—')} ·
+                ${plan.plan_uploaded_at?fmtDateTime(new Date(plan.plan_uploaded_at)):'—'} ·
+                ${STATE.lang==='ar'?'الإصدار':'Version'}: v${plan.plan_version||1}
+              </div>
+              <div class="btn-row" style="margin-top:8px;">
+                <a class="btn btn-ghost btn-sm" href="${plan.plan_file_url}" target="_blank" rel="noopener">${STATE.lang==='ar'?'معاينة':'Preview'}</a>
+                <a class="btn btn-ghost btn-sm" href="${plan.plan_file_url}" download="${esc(plan.plan_file_name)}">${STATE.lang==='ar'?'تنزيل':'Download'}</a>
+              </div>
+            </div>` : `<div class="esc-note">${STATE.lang==='ar'?'لم يتم رفع الخطة بعد':'Plan not uploaded yet'}</div>`}
+          ${plan.plan_comment? `<div class="field"><label>${STATE.lang==='ar'?'تعليق القسم':"Department's Comment"}</label><div>${esc(plan.plan_comment)}</div></div>`:''}
+          ${plan.verification_result? `<div class="field"><label>${STATE.lang==='ar'?'نتيجة التحقق':'Verification Result'}</label><div>${esc(plan.verification_result)} ${plan.verified_by?'— '+esc(plan.verified_by):''} ${plan.verification_date?'· '+fmtDate(plan.verification_date):''}</div></div>`:''}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>${STATE.lang==='ar'?'الأدلة الداعمة':'Supporting Evidence'}</h3><span class="hint">${evidence.length}</span></div>
+        <div class="card-pad">
+          ${evidence.length? evidence.map(e=>`
+            <div style="padding:10px 0;border-bottom:1px solid var(--line-soft);">
+              <div style="font-weight:700;font-size:12.4px;">📎 ${esc(e.file_name)}</div>
+              <div class="muted" style="font-size:11px;margin-top:2px;">
+                ${STATE.lang==='ar'?'النوع':'Type'}: ${esc((e.file_name||'').split('.').pop().toUpperCase())} ·
+                ${STATE.lang==='ar'?'رفع بواسطة':'Uploaded by'}: ${esc(e.uploaded_by||'—')} ·
+                ${e.uploaded_at?fmtDateTime(new Date(e.uploaded_at)):'—'}
+              </div>
+              ${isImage(e.file_name) && e.file_url? `<img src="${e.file_url}" style="max-width:220px;border-radius:8px;margin-top:8px;display:block;">`:''}
+              <div class="btn-row" style="margin-top:8px;">
+                ${e.file_url?`<a class="btn btn-ghost btn-sm" href="${e.file_url}" target="_blank" rel="noopener">${STATE.lang==='ar'?'معاينة':'Preview'}</a><a class="btn btn-ghost btn-sm" href="${e.file_url}" download="${esc(e.file_name)}">${STATE.lang==='ar'?'تنزيل':'Download'}</a>`:''}
+              </div>
+            </div>`).join('') : `<div class="muted">${STATE.lang==='ar'?'لا توجد أدلة مرفوعة':'No evidence uploaded'}</div>`}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>${STATE.lang==='ar'?'إجراءات الجودة':'Quality Actions'}</h3></div>
+      <div class="card-pad">
+        <div class="btn-row" style="margin-bottom:12px;">
+          <button class="btn btn-primary btn-sm" onclick="planLiveAction('${plan.id}','accept')">${STATE.lang==='ar'?'قبول الخطة':'Accept Plan'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="planLiveActionWithReason('${plan.id}','return_revision')">${STATE.lang==='ar'?'إعادة للتعديل':'Return for Revision'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="planLiveActionWithReason('${plan.id}','request_evidence')">${STATE.lang==='ar'?'طلب أدلة إضافية':'Request Evidence'}</button>
+          <button class="btn btn-ghost btn-sm" onclick="planLiveAction('${plan.id}','verify_implementation')">${STATE.lang==='ar'?'التحقق من التنفيذ':'Verify Implementation'}</button>
+        </div>
+        <div class="field"><label>${STATE.lang==='ar'?'نتيجة فاعلية الإجراء':'Effectiveness Verification Result'}</label>
+          <select id="pl-veff"><option value="Effective">Effective</option><option value="Partially Effective">Partially Effective</option><option value="Not Effective">Not Effective</option><option value="Requires Further Action">Requires Further Action</option></select></div>
+        <div class="field"><label><input type="checkbox" id="pl-evrev"> ${STATE.lang==='ar'?'تمت مراجعة الأدلة':'Evidence Reviewed'}</label></div>
+        <div class="field"><label><input type="checkbox" id="pl-effconf"> ${STATE.lang==='ar'?'تم تأكيد الفاعلية':'Effectiveness Confirmed'}</label></div>
+        <button class="btn btn-ghost btn-sm" onclick="verifyPlanLiveEffectiveness('${plan.id}')">${STATE.lang==='ar'?'تسجيل التحقق':'Record Verification'}</button>
+        <hr class="sep">
+        <button class="btn btn-primary btn-sm" onclick="planLiveAction('${plan.id}','close')">✓ ${STATE.lang==='ar'?'إغلاق الملاحظة':'Close Finding'}</button>
+        <button class="btn btn-ghost btn-sm" onclick="planLiveActionWithReason('${plan.id}','reopen')">↺ ${STATE.lang==='ar'?'إعادة فتح':'Reopen'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function planLiveAction(id, action, extra){
+  try{
+    const res = await fetch('/api/plans?id='+encodeURIComponent(id), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(Object.assign({action, actor: currentActorName()}, extra||{})) });
+    const data = await res.json();
+    if(!res.ok || !data.success){
+      if(data.reasons){ toast((STATE.lang==='ar'?'لا يمكن إغلاق الملاحظة: ':'Cannot close finding: ')+data.reasons.join(' ')); }
+      else toast(data.error||'Failed');
+      return;
+    }
+    toast(data.whatsapp? (data.whatsapp.success? (STATE.lang==='ar'?'تم تنفيذ الإجراء وإرسال واتساب فعلي':'Action recorded and real WhatsApp sent') : (STATE.lang==='ar'?`تم تنفيذ الإجراء — لم يُرسل واتساب: ${data.whatsapp.error}`:`Action recorded — WhatsApp not sent: ${data.whatsapp.error}`)) : (STATE.lang==='ar'?'تم تنفيذ الإجراء':'Action recorded'));
+    viewPlanLiveDetailAsync(id);
+  } catch(error){ toast(STATE.lang==='ar'?'فشل الإجراء':'Action failed'); }
+}
+function planLiveActionWithReason(id, action){
+  openModal(STATE.lang==='ar'?'السبب':'Reason',
+    `<div class="field"><label>${STATE.lang==='ar'?'السبب / التعليق':'Reason / Comment'} <span class="req">*</span></label><textarea id="plr-notes"></textarea></div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button class="btn btn-primary" onclick="submitPlanLiveReason('${id}','${action}')">${STATE.lang==='ar'?'تأكيد':'Confirm'}</button>`);
+}
+async function submitPlanLiveReason(id, action){
+  const notes = document.getElementById('plr-notes').value.trim();
+  if(!notes){ toast(STATE.lang==='ar'?'السبب مطلوب':'A reason is required'); return; }
+  closeModal();
+  await planLiveAction(id, action, {notes});
+}
+async function verifyPlanLiveEffectiveness(id){
+  await planLiveAction(id, 'verify_effectiveness', {
+    verification_result: document.getElementById('pl-veff').value,
+    evidence_reviewed: document.getElementById('pl-evrev').checked,
+    effectiveness_confirmed: document.getElementById('pl-effconf').checked,
+  });
+}
+
+/* ================================================================
+   FINAL PASS — Previous Round Follow-up, QPS Plan & Evidence Review
+   enhancements, and the live Executive Round Report. All talk to the
+   same real /api/* endpoints as the rest of the live workflow.
+   ================================================================ */
+
+const FOLLOWUP_LABELS = {
+  closed_sustained: {en:'Closed & Sustained', ar:'مغلقة ومستدامة', cls:'b-green'},
+  still_open: {en:'Still Open', ar:'ما زالت مفتوحة', cls:'b-amber'},
+  overdue: {en:'Overdue', ar:'متأخرة', cls:'b-red'},
+  recurred: {en:'Recurred', ar:'تكررت', cls:'b-orange'},
+};
+async function fetchPreviousFindings(department, excludeRoundId){
+  try{
+    let url = '/api/previous-findings?department='+encodeURIComponent(department);
+    if(excludeRoundId) url += '&exclude_round_id='+encodeURIComponent(excludeRoundId);
+    const res = await fetch(url);
+    const data = await res.json();
+    return (data.success? data.findings : []) || [];
+  } catch(error){ return []; }
+}
+function previousFollowUpTableHtml(findings){
+  if(!findings.length) return `<div class="muted" style="font-size:12px;">${STATE.lang==='ar'?'لا توجد ملاحظات سابقة لهذا القسم':'No previous findings on record for this department'}</div>`;
+  return `<div class="table-wrap"><table><thead><tr>
+    <th>${STATE.lang==='ar'?'رقم الجولة':'Round ID'}</th><th>${STATE.lang==='ar'?'الملاحظة':'Finding'}</th><th>${STATE.lang==='ar'?'المجال':'Domain'}</th><th>${STATE.lang==='ar'?'البند':'Checklist Item'}</th>
+    <th>${STATE.lang==='ar'?'الخطورة':'Risk'}</th><th>${STATE.lang==='ar'?'الخطة':'Plan Status'}</th><th>${STATE.lang==='ar'?'الأدلة':'Evidence'}</th><th>${STATE.lang==='ar'?'تحقق الجودة':'QPS Verification'}</th>
+    <th>${STATE.lang==='ar'?'الإغلاق':'Closure'}</th><th>${STATE.lang==='ar'?'الاستحقاق':'Due Date'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th>
+  </tr></thead><tbody>
+  ${findings.map(f=>{
+    const lbl = FOLLOWUP_LABELS[f.follow_up_status] || FOLLOWUP_LABELS.still_open;
+    const plan = f.plan;
+    return `<tr>
+      <td class="nowrap">${esc(f.round_id)}</td>
+      <td>${esc(f.checklist_item||domainName(f.domain))} ${f.is_recurring?`<span class="badge b-orange" style="margin-inline-start:4px;">🔁 ${STATE.lang==='ar'?'ملاحظة متكررة':'Recurring Finding'}</span>`:''}</td>
+      <td>${domainName(f.domain)}</td><td>${esc(f.checklist_item||'—')}</td>
+      <td>${riskBadge(f.risk_level)}</td>
+      <td>${plan?`<span class="badge b-blue">${esc(plan.status)}</span>`:(f.corrective_required?'—':(STATE.lang==='ar'?'غير مطلوبة':'Not required'))}</td>
+      <td>${plan&&plan.status!=='Plan Requested'?'✓':'—'}</td>
+      <td>${plan&&plan.verification_result?esc(plan.verification_result):'—'}</td>
+      <td>${plan&&plan.closure_date?fmtDate(plan.closure_date):'—'}</td>
+      <td class="nowrap">${plan?fmtDate(plan.due_date):'—'}</td>
+      <td><span class="badge ${lbl.cls}">${STATE.lang==='ar'?lbl.ar:lbl.en}</span></td>
+    </tr>`;
+  }).join('')}
+  </tbody></table></div>`;
+}
+
+/* ---------------- Internal "Round Follow-Up" page ---------------- */
+async function viewRoundFollowupAsync(department){
+  const content = document.getElementById('content');
+  content.innerHTML = `
+  <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${STATE.lang==='ar'?'متابعة ملاحظات الجولة السابقة':'Previous Round Follow-up'}</h1></div></div>
+  <div class="card" style="margin-bottom:16px;"><div class="card-pad">
+    <div class="field"><label>${STATE.lang==='ar'?'القسم':'Department'}</label>
+      <select id="rf-dept" onchange="viewRoundFollowupAsync(this.value)">
+        <option value="">${STATE.lang==='ar'?'اختر قسمًا':'Select a department'}</option>
+        ${DEPARTMENTS.map(d=>`<option value="${d.id}" ${department===d.id?'selected':''}>${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}
+      </select>
+    </div>
+  </div></div>
+  <div id="rf-results"></div>`;
+  if(!department) return;
+  document.getElementById('rf-results').innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  const findings = await fetchPreviousFindings(department);
+  document.getElementById('rf-results').innerHTML = `<div class="card"><div class="card-head"><h3>${deptName(department)}</h3><span class="hint">${findings.length}</span></div><div class="card-pad">${previousFollowUpTableHtml(findings)}</div></div>`;
+}
+
+/* ---------------- Live Executive Round Report ---------------- */
+async function viewExecutiveReportPickerAsync(){
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    const res = await fetch('/api/rounds');
+    const data = await res.json();
+    const rounds = (data.success? data.rounds : []) || [];
+    content.innerHTML = `
+    <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${STATE.lang==='ar'?'التقرير التنفيذي':'Executive Round Report'}</h1><div class="sub">${STATE.lang==='ar'?'يُبنى من بيانات النظام الحقيقية':'Generated from real system data'}</div></div></div>
+    <div class="card"><div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'رقم الجولة':'Round ID'}</th><th>${t('departments')}</th><th>${STATE.lang==='ar'?'التاريخ':'Date'}</th><th></th></tr></thead><tbody>
+    ${rounds.map(r=>`<tr><td>${esc(r.id)}</td><td>${(r.departments||[]).map(deptName).join(' + ')}</td><td>${fmtDate(r.planned_date)}</td>
+      <td class="right"><button class="btn btn-ghost btn-sm" onclick="viewExecutiveReportAsync('${r.id}')">🖨️ ${STATE.lang==='ar'?'عرض التقرير':'View Report'}</button></td></tr>`).join('')||`<tr><td colspan="4"><div class="empty">${STATE.lang==='ar'?'لا توجد جولات محفوظة بعد':'No rounds saved yet'}</div></td></tr>`}
+    </tbody></table></div></div>`;
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الجولات':'Could not load rounds'}</b></div>`;
+  }
+}
+async function viewExecutiveReportAsync(roundId){
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    const [roundRes, findingsRes] = await Promise.all([
+      fetch('/api/rounds?id='+encodeURIComponent(roundId)),
+      fetch('/api/findings?round_id='+encodeURIComponent(roundId)),
+    ]);
+    const roundData = await roundRes.json();
+    const findingsData = await findingsRes.json();
+    if(!roundData.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(roundData.error||'Round not found')}</b></div>`; return; }
+    const round = roundData.round;
+    const participants = (roundData.participants||[]).filter(Boolean);
+    const findings = (findingsData.success? findingsData.findings : []) || [];
+    const approvedRemarks = findings.filter(f=>f.status!=='Rejected');
+
+    // Next round: earliest scheduled round sharing a department, after this one.
+    let nextRoundLine = STATE.lang==='ar'?'لم تُحدد بعد':'Not yet scheduled';
+    try{
+      const allRes = await fetch('/api/rounds');
+      const allData = await allRes.json();
+      if(allData.success){
+        const candidates = (allData.rounds||[]).filter(r=> r.id!==round.id && r.status==='Scheduled' && (r.departments||[]).some(d=>(round.departments||[]).includes(d)) && new Date(r.planned_date) > new Date(round.planned_date));
+        candidates.sort((a,b)=>new Date(a.planned_date)-new Date(b.planned_date));
+        if(candidates.length) nextRoundLine = candidates[0].id+' — '+fmtDate(candidates[0].planned_date);
+      }
+    } catch(e){}
+
+    const byDomain = {};
+    DOMAINS.forEach(d=>{ byDomain[d.id] = approvedRemarks.filter(f=>f.domain===d.id); });
+
+    content.innerHTML = `
+    <div class="btn-row no-print" style="margin-bottom:14px;">
+      <button class="btn btn-ghost btn-sm" onclick="go('executive-report')">← ${STATE.lang==='ar'?'رجوع':'Back'}</button>
+      <button class="btn btn-primary btn-sm" onclick="window.print()">🖨️ ${STATE.lang==='ar'?'طباعة / حفظ PDF':'Print / Save PDF'}</button>
+    </div>
+    <div class="card card-pad" style="max-width:900px;margin:0 auto;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid var(--teal-800);padding-bottom:12px;margin-bottom:14px;">
+        <div style="font-size:11px;line-height:1.6;">Kingdom of Saudi Arabia<br>Hafr Al Batin Health Cluster<br>Maternity and Children Hospital</div>
+        <div style="text-align:center;">
+          <h2 style="font-size:19px;">MONTHLY HOSPITAL SAFETY ROUNDS</h2>
+          <div style="font-size:11.5px;font-style:italic;">Focused Review — ${round.departments.map(deptName).join(' & ')}</div>
+        </div>
+        <div style="font-size:11px;line-height:1.6;text-align:right;" dir="rtl">المملكة العربية السعودية<br>تجمع حفر الباطن الصحي<br>مستشفى الولادة والأطفال</div>
+      </div>
+      <table style="margin-bottom:14px;"><tbody>
+        <tr><td style="width:18%;font-weight:700;">MONTH:</td><td>${fmtDate(round.planned_date)}</td><td style="width:18%;font-weight:700;">ROUND ID:</td><td>${esc(round.id)}</td></tr>
+        <tr><td style="font-weight:700;">DEPARTMENT(S):</td><td colspan="3">${round.departments.map(deptName).join(' + ')}</td></tr>
+        <tr><td style="font-weight:700;vertical-align:top;">ROUND MEMBERS:</td><td colspan="3">${participants.length? participants.map(p=>esc(p.full_name)+(p.job_title?' — '+esc(p.job_title):'')).join(', ') : '—'}</td></tr>
+      </tbody></table>
+      <table style="margin-bottom:14px;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th>DESCRIPTION / REMARKS</th></tr></thead><tbody>
+      ${DOMAINS.map(d=>{
+        const items = byDomain[d.id];
+        const remark = items.length? items.map(f=>esc(f.checklist_item||domainName(d.id))+' ('+riskLabel(f.risk_level)+')').join('; ') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
+        return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
+      }).join('')}
+      </tbody></table>
+      <b style="font-size:12.5px;">Findings / Remarks &amp; Corrective Action Status</b>
+      <table style="margin:8px 0 14px;"><thead><tr><th>Finding</th><th>Risk</th><th>Responsible Dept</th><th>Plan Status</th><th>QPS Verification</th></tr></thead><tbody>
+      ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;">${esc(f.checklist_item||domainName(f.domain))}</td><td>${riskLabel(f.risk_level)}</td><td>${deptName(f.responsible_department||f.department)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):'—'}</td></tr>`).join('') : `<tr><td colspan="5">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
+      </tbody></table>
+      <div class="grid g2">
+        <div><b>NEXT ROUND DATE:</b><br>${nextRoundLine}</div>
+        <div><b>PATIENT SAFETY ROUNDS MEMBERS (Sign-off):</b><br>Hospital Director · QM&PS Director · Director of Nursing · Safety Officer Manager · IPCD Director · Risk Manager</div>
+      </div>
+      <div class="print-only" style="margin-top:20px;font-size:10.5px;color:var(--ink-soft);">Generated from the Patient Safety Rounds Management System — ${fmtDate(todayStr())}</div>
+    </div>`;
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر إنشاء التقرير':'Could not generate the report'}</b></div>`;
+  }
+}
+
+
 /* ---------------------------- INIT ---------------------------- */
-renderShell();
-render();
+if(isPublicRoundPath()){
+  bootPublicRound();
+} else if(isPublicPlanPath()){
+  bootPublicPlan();
+} else {
+  renderShell();
+  render();
+  loadRoundMembers();
+  refreshWhatsAppBackendStatus(true);
+}
 </script>
 </body>
 </html>
