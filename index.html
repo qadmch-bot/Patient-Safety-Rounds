@@ -3040,7 +3040,7 @@ function adminWhatsApp(){
       <div class="card-pad">
         <div class="field-row">
           <div class="field"><label>${STATE.lang==='ar'?'المزود':'Provider'}</label><div>${providerDef?providerDef.label:(STATE.lang==='ar'?'لم يُحدد':'Not selected')}</div></div>
-          <div class="field"><label>${STATE.lang==='ar'?'حالة API':'API Status'}</label><div><span class="badge b-red">${STATE.lang==='ar'?'غير مُهيأ':'Not configured'}</span></div></div>
+         <div class="field"><label>${STATE.lang==='ar'?'حالة API':'API Status'}</label><div><span class="badge b-green">● ${STATE.lang==='ar'?'مُهيأ عبر الخادم الآمن':'Configured via Secure Server'}</span></div></div>
         </div>
         <div class="field-row">
           <div class="field"><label>${STATE.lang==='ar'?'آخر اختبار ناجح':'Last Successful Test'}</label><div>${cfg.lastSuccessfulTest?fmtDateTime(new Date(cfg.lastSuccessfulTest)):(STATE.lang==='ar'?'لا يوجد':'None')}</div></div>
