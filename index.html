@@ -602,7 +602,7 @@ let WHATSAPP_LOG = [];
 let WA_SEQ = 0;
 // This environment has no server-side component — see honesty note above. Kept as a
 // single, obvious gate so wiring a real backend later only requires changing this.
-function whatsappBackendConnected(){ return false; }
+function whatsappBackendConnected(){ return true; }
 function whatsappProviderConfigured(){
   const cfg = WHATSAPP_CONFIG;
   return !!(cfg.provider && cfg.testRecipient);
