@@ -628,10 +628,82 @@ function waTestConnection(){
   }
   return true; // unreachable while whatsappBackendConnected() is false — real integration point.
 }
-function waSendTestMessage(){
-  if(!whatsappProviderConfigured()){ toast(STATE.lang==='ar'?'يرجى اختيار مزود وإدخال رقم اختبار أولًا':'Please select a provider and enter a test recipient number first'); return; }
-  const ok = waTestConnection();
-  if(!ok) return; // honest failure already logged by waTestConnection()
+async function waSendTestMessage(){
+  const cfg = WHATSAPP_CONFIG;
+
+  const recipient =
+    (document.getElementById('wa-testnumber')?.value || cfg.testRecipient || '').trim();
+
+  if(!recipient){
+    toast(
+      STATE.lang === 'ar'
+        ? 'يرجى إدخال رقم المستلم للاختبار أولاً'
+        : 'Please enter a test recipient number first'
+    );
+    return;
+  }
+
+  toast(
+    STATE.lang === 'ar'
+      ? 'جاري إرسال رسالة الاختبار عبر WhatsApp...'
+      : 'Sending WhatsApp test message...'
+  );
+
+  try {
+    const response = await fetch('/api/send-whatsapp', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        to: recipient,
+        message: 'اختبار نظام جولات سلامة المرضى - تم الاتصال بخدمة WhatsApp بنجاح.'
+      })
+    });
+
+    const data = await response.json();
+
+    if(!response.ok || !data.success){
+      throw new Error(data.error || 'WhatsApp sending failed');
+    }
+
+    cfg.lastSuccessfulTest = fmtDateTime(new Date());
+    cfg.lastError = '';
+
+    waLog({
+      type: 'Test Message',
+      roundId: 'TEST',
+      recipient: recipient,
+      recipientName: 'Test Recipient',
+      scheduledTime: '-',
+      sentTime: fmtDateTime(new Date()),
+      provider: 'Twilio WhatsApp',
+      status: data.status || 'Sent',
+      messageId: data.sid || null
+    });
+
+    toast(
+      STATE.lang === 'ar'
+        ? 'تم إرسال رسالة الاختبار إلى Twilio بنجاح'
+        : 'Test message sent successfully through Twilio'
+    );
+
+    render();
+
+  } catch(error) {
+    cfg.lastFailedTest = fmtDateTime(new Date());
+    cfg.lastError = error.message;
+
+    console.error('WhatsApp Test Error:', error);
+
+    toast(
+      (STATE.lang === 'ar'
+        ? 'فشل إرسال رسالة الاختبار: '
+        : 'Test message failed: ') + error.message
+    );
+
+    render();
+  }
 }
 function waTestReminder(kind, delay){
   const cfg = WHATSAPP_CONFIG;
