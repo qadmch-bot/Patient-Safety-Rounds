@@ -3027,11 +3027,11 @@ function adminWhatsApp(){
   const fieldLabels = {apiBaseUrl:'API Base URL', accessToken:'Access Token', phoneNumberId:'Phone Number ID', businessAccountId:'Business Account ID', accountSid:'Account SID', authToken:'Authentication Token', apiKey:'API Key'};
   const maskedFields = new Set(['accessToken','authToken','apiKey']);
   return `
-  <div class="info-banner" style="background:var(--red-soft);border-color:#f0c7c3;color:var(--red);">
-    ⚠ ${STATE.lang==='ar'
-      ? 'هذا التطبيق يعمل بالكامل داخل المتصفح دون أي خادم خلفي. لا يمكن إرسال رسائل WhatsApp فعلية أو الاتصال بواجهة برمجة تطبيقات حقيقية دون خادم آمن يحفظ بيانات الاعتماد. تعرض هذه الصفحة الإعداد الكامل وواجهة الاختبار، لكن كل محاولة اختبار/إرسال ستُبلّغ بصدق عن عدم توفر التكامل بدلًا من محاكاة النجاح.'
-      : 'This application runs entirely in the browser with no backend server. Real WhatsApp messages cannot be sent, and no real API can be contacted, without a secure server holding the provider credentials. This page provides the full configuration and test workflow, but every test/send action will honestly report that no integration is connected rather than simulate success.'}
-  </div>
+ <div class="info-banner" style="background:var(--green-soft);border-color:#b9dfc9;color:var(--green);">
+  ✅ ${STATE.lang==='ar'
+    ? 'تم ربط النظام بخادم آمن على Vercel، ويتم إرسال رسائل WhatsApp عبر Twilio من خلال الخادم دون كشف بيانات الاعتماد داخل المتصفح.'
+    : 'Secure backend connected through Vercel. WhatsApp messages are sent through Twilio server-side without exposing credentials in the browser.'}
+</div>
   ${cfg.testMode? `<div class="esc-note" style="margin-bottom:16px;background:var(--amber-soft);border-color:#eeddb0;color:var(--amber);font-weight:800;text-align:center;">${STATE.lang==='ar'?'وضع الاختبار نشط':'TEST MODE ACTIVE'}</div>`:''}
 
   <div class="grid g2" style="align-items:start;">
