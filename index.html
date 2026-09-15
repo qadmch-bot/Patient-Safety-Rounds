@@ -3182,7 +3182,11 @@ function adminWhatsApp(){
         <td><select onchange="updateRoundMember('${m.id}',{preferred_language:this.value})"><option value="ar" ${m.preferred_language==='ar'?'selected':''}>AR</option><option value="en" ${m.preferred_language==='en'?'selected':''}>EN</option></select></td>
         <td><input type="checkbox" ${m.whatsapp_enabled?'checked':''} onchange="updateRoundMember('${m.id}',{whatsapp_enabled:this.checked})"></td>
         <td><input type="checkbox" ${m.active?'checked':''} onchange="updateRoundMember('${m.id}',{active:this.checked})"></td>
-        <td class="right"><button class="small-btn-icon" onclick="openMemberForm('${m.id}')" title="Edit">✎</button> <button class="small-btn-icon" onclick="deleteRoundMember('${m.id}')" title="Delete">🗑️</button></td>
+        <td class="right">
+  <button class="small-btn-icon" onclick="waSendMemberTestMessage('${m.id}')" title="WhatsApp Test">📲</button>
+  <button class="small-btn-icon" onclick="openMemberForm('${m.id}')" title="Edit">✏️</button>
+  <button class="small-btn-icon" onclick="deleteRoundMember('${m.id}')" title="Delete">🗑️</button>
+</td>
       </tr>`).join('')}
       </tbody></table></div>` :
       `<div class="empty"><div class="eic">👥</div>${STATE.lang==='ar'?'لا يوجد أعضاء محفوظون بعد.':'No members saved yet.'}<div class="btn-row" style="justify-content:center;margin-top:12px;"><button class="btn btn-ghost btn-sm" onclick="importDefaultRoster()">${STATE.lang==='ar'?'استيراد القائمة الافتراضية':'Import default roster'}</button></div></div>`}
@@ -4046,6 +4050,104 @@ if(isPublicRoundPath()){
   render();
   loadRoundMembers();
   refreshWhatsAppBackendStatus(true);
+}async function waSendMemberTestMessage(memberId){
+  const member = ROUND_MEMBERS.find(m => String(m.id) === String(memberId));
+
+  if(!member){
+    toast(STATE.lang === 'ar' ? 'لم يتم العثور على العضو' : 'Member not found');
+    return;
+  }
+
+  const recipient = (member.mobile || '').trim();
+
+  if(!recipient){
+    toast(
+      STATE.lang === 'ar'
+        ? 'لا يوجد رقم واتساب مسجل لهذا العضو'
+        : 'No WhatsApp number is registered for this member'
+    );
+    return;
+  }
+
+  if(!member.whatsapp_enabled){
+    toast(
+      STATE.lang === 'ar'
+        ? 'واتساب غير مفعّل لهذا العضو'
+        : 'WhatsApp is not enabled for this member'
+    );
+    return;
+  }
+
+  const confirmed = confirm(
+    STATE.lang === 'ar'
+      ? `إرسال رسالة اختبار واتساب الآن إلى ${member.full_name}؟`
+      : `Send a WhatsApp test message now to ${member.full_name}?`
+  );
+
+  if(!confirmed) return;
+
+  toast(
+    STATE.lang === 'ar'
+      ? `جاري إرسال رسالة اختبار إلى ${member.full_name}...`
+      : `Sending test message to ${member.full_name}...`
+  );
+
+  try {
+    const response = await fetch('/api/send-whatsapp', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        to: recipient,
+        message:
+`🔔 اختبار نظام جولات سلامة المرضى
+
+مرحباً ${member.full_name}
+
+هذه رسالة اختبار للتأكد من تفعيل إشعارات WhatsApp الخاصة بجولات سلامة المرضى.
+
+مستشفى الولادة والأطفال
+إدارة الجودة وسلامة المرضى`
+      })
+    });
+
+    const data = await response.json();
+
+    if(!response.ok || !data.success){
+      throw new Error(data.error || 'WhatsApp sending failed');
+    }
+
+    waLog({
+      type: 'Member Test Message',
+      roundId: 'TEST',
+      recipient: recipient,
+      recipientName: member.full_name,
+      scheduledTime: '—',
+      sentTime: fmtDateTime(new Date()),
+      provider: 'Twilio WhatsApp',
+      status: 'Sent',
+      messageId: data.sid || data.messageSid || null,
+      deliveryStatus: 'Sent',
+      error: null,
+      retryCount: 0
+    });
+
+    toast(
+      STATE.lang === 'ar'
+        ? `تم إرسال رسالة الاختبار إلى ${member.full_name} بنجاح ✓`
+        : `Test message sent successfully to ${member.full_name} ✓`
+    );
+
+  } catch(error){
+    console.error('Member WhatsApp test failed:', error);
+
+    toast(
+      STATE.lang === 'ar'
+        ? `فشل إرسال رسالة الاختبار: ${error.message}`
+        : `Test message failed: ${error.message}`
+    );
+  }
 }
 </script>
 </body>
