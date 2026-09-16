@@ -326,6 +326,7 @@ en:{
   findings_live_nav:"Findings by Department",
   plans_live_nav:"Corrective Plans",
   round_followup_nav:"Previous Round Follow-up",
+  round_reminders_nav:"Send Round Reminders",
   executive_report_nav:"Executive Report",
 },
 ar:{
@@ -344,6 +345,7 @@ ar:{
   findings_live_nav:"الملاحظات حسب القسم",
   plans_live_nav:"الخطط التصحيحية",
   round_followup_nav:"متابعة ملاحظات الجولة السابقة",
+  round_reminders_nav:"إرسال تذكيرات الجولة",
   executive_report_nav:"التقرير التنفيذي",
 }};
 function t(k){ return (I18N[STATE.lang]||I18N.en)[k] || k; }
@@ -644,6 +646,60 @@ function whatsappFailureMessage(detailError){
     : 'WhatsApp API configuration is required before real messages can be sent.';
   return detailError ? `${base} (${detailError})` : base;
 }
+
+/* ---------------------------- WA.ME CLICK-TO-SEND (no API, no approval) ----------------------------
+   An official, ToS-safe alternative to the Twilio/API path: wa.me just opens the
+   person's own WhatsApp with the message pre-filled — they still press Send
+   themselves, so it is exactly the same as typing it manually. No credentials,
+   no backend call, no risk of a number ban. Used everywhere a real automatic
+   send isn't configured/desired. */
+function waMeLink(phone, message){
+  if(!phone) return null;
+  const clean = String(phone).replace(/[^\d]/g,'');
+  if(!clean) return null;
+  return `https://wa.me/${clean}?text=${encodeURIComponent(message)}`;
+}
+function waMeButtonHtml(phone, message, label){
+  const link = waMeLink(phone, message);
+  if(!link) return `<span class="badge b-grey">${STATE.lang==='ar'?'لا يوجد رقم جوال':'No mobile number'}</span>`;
+  return `<a class="btn btn-primary btn-sm" href="${link}" target="_blank" rel="noopener">📤 ${esc(label||(STATE.lang==='ar'?'إرسال عبر واتساب':'Send via WhatsApp'))}</a>`;
+}
+function offerWaMeModal(title, member, message){
+  openModal(title,
+    `<p style="font-size:12.5px;margin-bottom:14px;">${STATE.lang==='ar'?'اضغطي الزر لفتح واتساب مع الرسالة جاهزة لـ':'Click the button to open WhatsApp with the message ready for'} <b>${esc(member.full_name)}</b>.</p>
+     <div class="side-note" style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow-y:auto;">${esc(message)}</div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إغلاق':'Close'}</button>${waMeButtonHtml(member.mobile, message, STATE.lang==='ar'?'فتح واتساب':'Open WhatsApp')}`
+  );
+}
+// Message text builders — mirror lib/messages.js exactly, but run client-side
+// so a wa.me link can be generated instantly with no server round-trip.
+function waRoundReminderText(lang, kind, round, link){
+  const depts = round.departments.map(deptName).join(' + ');
+  const kindAr = kind==='24h'?'قبل 24 ساعة':'قبل ساعة واحدة';
+  const kindEn = kind==='24h'?'24 hours before':'1 hour before';
+  if(lang==='ar'){
+    return `🔔 تذكير بجولة سلامة المرضى (${kindAr})\n\nرقم الجولة: ${round.id}\nالقسم: ${depts}\nالتاريخ: ${round.planned_date}\nالوقت: ${round.planned_time}\n\nيرجى الاستعداد للجولة ومراجعة البنود المتعلقة بمجالكم.\n\nللدخول إلى الجولة وتسجيل الملاحظات:\n${link}\n\nإدارة الجودة وسلامة المرضى\nمستشفى الولادة والأطفال – حفر الباطن`;
+  }
+  return `🔔 Patient Safety Round Reminder (${kindEn})\n\nRound ID: ${round.id}\nDepartment(s): ${depts}\nDate: ${round.planned_date}\nTime: ${round.planned_time}\n\nPlease prepare for the round and review the items relevant to your area.\n\nTo open the round and record observations:\n${link}\n\nQuality & Patient Safety Management\nMaternity & Children Hospital – Hafr Al Batin`;
+}
+function waPlanRequestText(lang, department, roundId, findingSummary, startDate, dueDate, link){
+  if(lang==='ar'){
+    return `🔔 طلب خطة تصحيحية — جولة سلامة المرضى\n\nالقسم: ${deptName(department)}\nرقم الجولة: ${roundId}\n\nتم اعتماد ملاحظة/ملاحظات الجولة من قبل إدارة الجودة وسلامة المرضى، ويتطلب استكمال الخطة التصحيحية ضمن الفترة المحددة.\n${findingSummary?'\nالملاحظة: '+findingSummary+'\n':''}\n📅 تاريخ بدء المتابعة:\n${fmtDate(startDate)}\n\n⏳ الموعد النهائي:\n${fmtDate(dueDate)}\n\nيرجى الدخول عبر الرابط التالي لرفع الخطة التصحيحية والأدلة الداعمة:\n\n${link}\n\nإدارة الجودة وسلامة المرضى\nمستشفى الولادة والأطفال – حفر الباطن`;
+  }
+  return `🔔 Corrective Plan Request — Patient Safety Round\n\nDepartment: ${deptName(department)}\nRound ID: ${roundId}\n\nQuality & Patient Safety has approved a round finding that requires a corrective plan within the specified period.\n${findingSummary?'\nFinding: '+findingSummary+'\n':''}\nStart Date: ${fmtDate(startDate)}\nDue Date: ${fmtDate(dueDate)}\n\nPlease open the link below to upload the corrective plan and supporting evidence:\n\n${link}\n\nQuality & Patient Safety Management\nMaternity & Children Hospital – Hafr Al Batin`;
+}
+function waPlanReminderText(lang, kind, department, roundId, dueDate, link){
+  const headingsAr = {before_due:'🔔 تذكير بالخطة التصحيحية', due_today:'🔔 الخطة التصحيحية مستحقة اليوم', overdue:'🔴 الخطة التصحيحية متأخرة', revision:'↺ مطلوب تعديل على الخطة التصحيحية', evidence:'📎 مطلوب أدلة إضافية'};
+  const headingsEn = {before_due:'🔔 Corrective Plan Reminder', due_today:'🔔 Corrective Plan Due Today', overdue:'🔴 Corrective Plan Overdue', revision:'↺ Corrective Plan Revision Required', evidence:'📎 Additional Evidence Required'};
+  const days = Math.round((parseD(dueDate) - parseD(todayStr()))/86400000);
+  const daysTextAr = days>=0? days : `متأخرة ${Math.abs(days)} يوم`;
+  const daysTextEn = days>=0? days : `${Math.abs(days)} day(s) overdue`;
+  if(lang==='ar'){
+    return `${headingsAr[kind]||headingsAr.before_due}\n\nالقسم: ${deptName(department)}\nرقم الجولة: ${roundId}\n\nنذكركم بضرورة استكمال ورفع الخطة التصحيحية الخاصة بملاحظات جولة سلامة المرضى.\n\n⏳ الموعد النهائي:\n${fmtDate(dueDate)}\n\nالأيام المتبقية:\n${daysTextAr}\n\nلرفع الخطة والأدلة:\n${link}\n\nإدارة الجودة وسلامة المرضى\nمستشفى الولادة والأطفال – حفر الباطن`;
+  }
+  return `${headingsEn[kind]||headingsEn.before_due}\n\nDepartment: ${deptName(department)}\nRound ID: ${roundId}\n\nThis is a reminder to complete and upload the corrective plan for the Patient Safety Round finding(s).\n\nDue Date:\n${fmtDate(dueDate)}\n\nDays Remaining:\n${daysTextEn}\n\nTo upload the plan and evidence:\n${link}\n\nQuality & Patient Safety Management\nMaternity & Children Hospital – Hafr Al Batin`;
+}
+
 // Real connectivity check — calls GET /api/whatsapp-status, which itself calls the Twilio
 // Account API with the credentials configured in Vercel Environment Variables. No message
 // is sent. Reports the true result; never assumes success.
@@ -764,7 +820,7 @@ function waRetry(logId){
   entry.error = whatsappFailureMessage();
   logAudit(currentActorName(),'WhatsApp Retry','WhatsApp',`Retry #${entry.retryCount} for ${logId} — failed: no backend/API configured.`);
   toast(whatsappFailureMessage());
-  go('admin',{tab:'whatsapp-log'});
+  go('admin',{tab:'whatsapp'});
 }
 // Scheduling hook: called after a round is persisted (see submitNewRound). Actually
 // creates the 24h/1h reminder rows in Supabase via POST /api/create-reminder — the
@@ -1248,6 +1304,7 @@ function navConfig(){
     {view:'findings-live', ic:'🗂️', label:'findings_live_nav'},
     {view:'plans-live', ic:'📝', label:'plans_live_nav'},
     {view:'round-followup', ic:'🔁', label:'round_followup_nav'},
+    {view:'round-reminders', ic:'📤', label:'round_reminders_nav'},
     {view:'executive-report', ic:'📊', label:'executive_report_nav'},
   ]});
   if(STATE.role==='quality') groups.push({label:{en:'System',ar:'النظام'}, items:[{view:'admin', ic:'⚙️', label:'admin'}]});
@@ -1372,12 +1429,13 @@ function render(){
     else if(v==='report-detail') c.innerHTML = viewReportDetail(STATE.params.id);
     else if(v==='evidence') c.innerHTML = viewEvidence();
     else if(v==='leadership') c.innerHTML = viewLeadership();
-    else if(v==='admin') c.innerHTML = viewAdmin();
+    else if(v==='admin') { c.innerHTML = viewAdmin(); if((STATE.params.tab||'departments')==='whatsapp'){ renderWhatsAppAdminAsync(); } }
     else if(v==='search') c.innerHTML = viewSearch(STATE.params.q||'');
     else if(v==='qps-review') { viewQpsReviewAsync(); }
     else if(v==='findings-live') { viewFindingsLiveAsync(); }
     else if(v==='plans-live') { viewPlansLiveAsync(); }
     else if(v==='round-followup') { viewRoundFollowupAsync(STATE.params.department||''); }
+    else if(v==='round-reminders') { viewRoundRemindersAsync(STATE.params.id||''); }
     else if(v==='executive-report') { viewExecutiveReportPickerAsync(); }
     else c.innerHTML = viewDashboard();
   } catch(err){
@@ -2833,7 +2891,7 @@ function viewNotificationCenter(){
       </div>`).join('') : `<div class="empty">${STATE.lang==='ar'?'لا توجد إشعارات':'No notifications'}</div>`}
   </div>
   <div class="card">
-    <div class="card-head"><h3>${STATE.lang==='ar'?'أحدث سجلات WhatsApp':'Recent WhatsApp Log'}</h3><span class="hint tbl-link" onclick="go('admin',{tab:'whatsapp-log'})">${STATE.lang==='ar'?'عرض السجل الكامل':'View full log'} →</span></div>
+    <div class="card-head"><h3>${STATE.lang==='ar'?'أحدث سجلات WhatsApp':'Recent WhatsApp Log'}</h3><span class="hint tbl-link" onclick="go('admin',{tab:'whatsapp'})">${STATE.lang==='ar'?'عرض السجل الكامل':'View full log'} →</span></div>
     ${WHATSAPP_LOG.length? `<div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'النوع':'Type'}</th><th>${STATE.lang==='ar'?'المستلم':'Recipient'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'الخطأ':'Error'}</th></tr></thead><tbody>
     ${WHATSAPP_LOG.slice(0,8).map(l=>`<tr><td>${esc(l.type)}</td><td>${esc(l.recipientName)}</td><td><span class="badge ${l.status==='Failed'?'b-red':l.status==='Scheduled'?'b-blue':'b-green'}">${l.status}</span></td><td class="muted" style="font-size:11px;">${esc(l.error||'—')}</td></tr>`).join('')}
     </tbody></table></div>` : `<div class="empty">${STATE.lang==='ar'?'لا توجد سجلات WhatsApp بعد':'No WhatsApp log entries yet'}</div>`}
@@ -3037,7 +3095,7 @@ function viewLeadership(){
       </div>
       ${!whatsappBackendConnected()? `<div class="muted" style="font-size:11.5px;">${STATE.lang==='ar'?'لا يوجد تكامل خلفي متصل بواجهة WhatsApp في هذه البيئة — راجع إعدادات WhatsApp.':'No backend is connected to a WhatsApp API in this environment — see WhatsApp Settings.'}</div>`
         : ''}
-      ${WHATSAPP_LOG.some(l=>l.status==='Failed')? `<div class="esc-note" style="margin-top:10px;">${STATE.lang==='ar'?'إشعارات فاشلة تتطلب المتابعة':'Failed Notifications Requiring Attention'}: ${WHATSAPP_LOG.filter(l=>l.status==='Failed').length} — <span class="tbl-link" onclick="go('admin',{tab:'whatsapp-log'})">${STATE.lang==='ar'?'عرض السجل':'View log'}</span></div>`:''}
+      ${WHATSAPP_LOG.some(l=>l.status==='Failed')? `<div class="esc-note" style="margin-top:10px;">${STATE.lang==='ar'?'إشعارات فاشلة تتطلب المتابعة':'Failed Notifications Requiring Attention'}: ${WHATSAPP_LOG.filter(l=>l.status==='Failed').length} — <span class="tbl-link" onclick="go('admin',{tab:'whatsapp'})">${STATE.lang==='ar'?'عرض السجل':'View log'}</span></div>`:''}
     </div>
   </div>
 
@@ -3078,8 +3136,7 @@ function viewAdmin(){
   const tabs = [
     {k:'departments', label: STATE.lang==='ar'?'الأقسام':'Departments'},
     {k:'domains', label: STATE.lang==='ar'?'المجالات السبعة وقوائم التدقيق':'Seven Domains & Checklists'},
-    {k:'whatsapp', label: STATE.lang==='ar'?'إعدادات WhatsApp':'WhatsApp Settings'},
-    {k:'whatsapp-log', label: STATE.lang==='ar'?'سجل إشعارات WhatsApp':'WhatsApp Notification Log'},
+    {k:'whatsapp', label: STATE.lang==='ar'?'إشعارات WhatsApp':'WhatsApp Notifications'},
     {k:'thresholds', label: STATE.lang==='ar'?'حدود الالتزام والتصعيد':'Thresholds & Escalation'},
     {k:'users', label: STATE.lang==='ar'?'المستخدمون والأدوار':'Users & Roles'},
     {k:'audit', label: STATE.lang==='ar'?'سجل التدقيق':'Audit Trail'},
@@ -3089,33 +3146,102 @@ function viewAdmin(){
   <div class="tabs">${tabs.map(tb=>`<div class="tab ${tab===tb.k?'active':''}" onclick="go('admin',{tab:'${tb.k}'})">${tb.label}</div>`).join('')}</div>
   ${tab==='departments'?adminDepartments():''}
   ${tab==='domains'?adminDomains():''}
-  ${tab==='whatsapp'?adminWhatsApp():''}
-  ${tab==='whatsapp-log'?adminWhatsAppLog():''}
+  ${tab==='whatsapp'?`<div id="wa-admin-root"><div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div></div>`:''}
   ${tab==='thresholds'?adminThresholds():''}
   ${tab==='users'?adminUsers():''}
   ${tab==='audit'?adminAudit():''}
   `;
 }
-function adminWhatsApp(){
+/* ================================================================
+   ADMIN > WHATSAPP NOTIFICATIONS — full rebuild with 8 ordered sections:
+   1. Twilio / WhatsApp Configuration
+   2. WhatsApp Connection Test
+   3. Manual WhatsApp Send  (NEW)
+   4. Automatic Reminder Settings
+   5. Patient Safety Rounds Members
+   6. WhatsApp Templates (now real, admin-editable approval status)
+   7. Manual Message History  (NEW)
+   8. Automatic Notification History (now reads the real whatsapp_reminders table)
+   Manual sending is fully independent of the automatic 24h/1h schedule —
+   it never touches whatsapp_reminders or the cron queue.
+   ================================================================ */
+let WA_ADMIN_STATE = {
+  loaded:false, rounds:[], templates:[], manualHistory:[], autoHistory:[],
+  selectedRoundId:'', recipientType:'mobile', manualNumber:'', selectedMemberId:'', selectedMemberIds:[],
+  language:'ar', templateName:'patient_safety_round_24h_reminder',
+};
+async function renderWhatsAppAdminAsync(){
+  const root = document.getElementById('wa-admin-root');
+  if(!root) return;
+  try{
+    const [roundsRes, templatesRes, manualRes, autoRes] = await Promise.all([
+      fetch('/api/rounds').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/whatsapp-templates').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/whatsapp-manual-send').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/whatsapp-reminders-log').then(r=>r.json()).catch(()=>({success:false})),
+    ]);
+    WA_ADMIN_STATE.rounds = roundsRes.success? roundsRes.rounds : [];
+    WA_ADMIN_STATE.templates = templatesRes.success? templatesRes.templates : [];
+    WA_ADMIN_STATE.manualHistory = manualRes.success? manualRes.messages : [];
+    WA_ADMIN_STATE.autoHistory = autoRes.success? autoRes.reminders : [];
+    if(!WA_ADMIN_STATE.selectedRoundId && WA_ADMIN_STATE.rounds.length) WA_ADMIN_STATE.selectedRoundId = WA_ADMIN_STATE.rounds[0].id;
+    if(!WA_ADMIN_STATE.templates.some(t=>t.name===WA_ADMIN_STATE.templateName) && WA_ADMIN_STATE.templates.length) WA_ADMIN_STATE.templateName = WA_ADMIN_STATE.templates[0].name;
+    WA_ADMIN_STATE.loaded = true;
+  } catch(error){ /* leave whatever was previously loaded */ }
+  root.innerHTML = renderWhatsAppAdminSections();
+}
+function selectedRound(){ return WA_ADMIN_STATE.rounds.find(r=>String(r.id)===String(WA_ADMIN_STATE.selectedRoundId)) || null; }
+function manualRecipients(){
+  const round = selectedRound();
+  if(WA_ADMIN_STATE.recipientType==='mobile'){
+    return WA_ADMIN_STATE.manualNumber? [{name:'', mobile:WA_ADMIN_STATE.manualNumber}] : [];
+  }
+  if(WA_ADMIN_STATE.recipientType==='single'){
+    const m = ROUND_MEMBERS.find(x=>String(x.id)===String(WA_ADMIN_STATE.selectedMemberId));
+    return m? [{name:m.full_name, mobile:m.mobile, memberId:m.id}] : [];
+  }
+  return ROUND_MEMBERS.filter(m=>WA_ADMIN_STATE.selectedMemberIds.includes(String(m.id))).map(m=>({name:m.full_name, mobile:m.mobile, memberId:m.id}));
+}
+function manualMessagePreviewText(){
+  const round = selectedRound();
+  if(!round) return STATE.lang==='ar'?'اختاري جولة أولًا':'Select a round first';
+  const link = window.location.origin + '/round/' + (round.secure_token||'—');
+  return waRoundManualPreviewText(WA_ADMIN_STATE.language, round, link);
+}
+// Mirrors lib/messages.js manualRoundMessage() exactly, client-side, for the live preview.
+function waRoundManualPreviewText(lang, round, link){
+  const dateStr = fmtDate(round.planned_date);
+  const timeStr = round.planned_time || '';
+  if(lang==='ar'){
+    return `تذكير بجولة سلامة المرضى\n\nنذكركم بأن جولة سلامة المرضى ستعقد بتاريخ ${dateStr} في تمام الساعة ${timeStr}.\n\nيرجى الدخول عبر الرابط أدناه للمشاركة في الجولة وتسجيل الملاحظات حسب المحور المخصص لكم.\n\n${link}\n\nإدارة الجودة وسلامة المرضى\nمستشفى الولادة والأطفال – حفر الباطن`;
+  }
+  return `Patient Safety Round Reminder\n\nThis is to remind you that a Patient Safety Round is scheduled on ${dateStr} at ${timeStr}.\n\nPlease use the link below to join the round and record observations for your assigned domain.\n\n${link}\n\nQuality & Patient Safety Management\nMaternity & Children Hospital – Hafr Al Batin`;
+}
+
+function renderWhatsAppAdminSections(){
   const cfg = WHATSAPP_CONFIG;
   const providerDef = WHATSAPP_PROVIDERS.find(p=>p.id===cfg.provider);
   const fieldLabels = {apiBaseUrl:'API Base URL', accessToken:'Access Token', phoneNumberId:'Phone Number ID', businessAccountId:'Business Account ID', accountSid:'Account SID', authToken:'Authentication Token', apiKey:'API Key'};
   const maskedFields = new Set(['accessToken','authToken','apiKey']);
+  const round = selectedRound();
+  const selectedTemplate = WA_ADMIN_STATE.templates.find(t=>t.name===WA_ADMIN_STATE.templateName);
+  const templateOk = selectedTemplate && selectedTemplate.status==='Approved';
+
   return `
- <div class="info-banner" style="background:var(--green-soft);border-color:#b9dfc9;color:var(--green);">
-  ✅ ${STATE.lang==='ar'
+  <div class="info-banner" style="background:var(--green-soft);border-color:#b9dfc9;color:var(--green);">
+   ✅ ${STATE.lang==='ar'
     ? 'تم ربط النظام بخادم آمن على Vercel، ويتم إرسال رسائل WhatsApp عبر Twilio من خلال الخادم دون كشف بيانات الاعتماد داخل المتصفح.'
     : 'Secure backend connected through Vercel. WhatsApp messages are sent through Twilio server-side without exposing credentials in the browser.'}
-</div>
-  ${cfg.testMode? `<div class="esc-note" style="margin-bottom:16px;background:var(--amber-soft);border-color:#eeddb0;color:var(--amber);font-weight:800;text-align:center;">${STATE.lang==='ar'?'وضع الاختبار نشط':'TEST MODE ACTIVE'}</div>`:''}
+  </div>
 
+  <h3 style="font-size:13px;color:var(--teal-800);margin:18px 0 8px;">1. ${STATE.lang==='ar'?'إعداد Twilio / WhatsApp':'Twilio / WhatsApp Configuration'}</h3>
   <div class="grid g2" style="align-items:start;">
     <div class="card">
       <div class="card-head"><h3>${STATE.lang==='ar'?'حالة التكامل':'Integration Status'}</h3><span class="badge ${whatsappBackendConnected()?'b-green':'b-red'}">${whatsappBackendConnected()?(STATE.lang==='ar'?'متصل':'Connected'):(STATE.lang==='ar'?'غير متصل':'Not Connected')}</span></div>
       <div class="card-pad">
         <div class="field-row">
           <div class="field"><label>${STATE.lang==='ar'?'المزود':'Provider'}</label><div>${providerDef?providerDef.label:(STATE.lang==='ar'?'لم يُحدد':'Not selected')}</div></div>
-         <div class="field"><label>${STATE.lang==='ar'?'حالة API':'API Status'}</label><div><span class="badge b-green">● ${STATE.lang==='ar'?'مُهيأ عبر الخادم الآمن':'Configured via Secure Server'}</span></div></div>
+          <div class="field"><label>${STATE.lang==='ar'?'حالة API':'API Status'}</label><div><span class="badge b-green">● ${STATE.lang==='ar'?'مُهيأ عبر الخادم الآمن':'Configured via Secure Server'}</span></div></div>
         </div>
         <div class="field-row">
           <div class="field"><label>${STATE.lang==='ar'?'آخر اختبار ناجح':'Last Successful Test'}</label><div>${cfg.lastSuccessfulTest?fmtDateTime(new Date(cfg.lastSuccessfulTest)):(STATE.lang==='ar'?'لا يوجد':'None')}</div></div>
@@ -3134,39 +3260,104 @@ function adminWhatsApp(){
           </select>
         </div>
         ${providerDef? providerDef.fields.map(f=>`<div class="field"><label>${fieldLabels[f]}</label><input type="${maskedFields.has(f)?'password':'text'}" id="wa-cred-${f}" value="${esc(cfg.credentials[f]||'')}" placeholder="${maskedFields.has(f)?'••••••••':fieldLabels[f]}"></div>`).join('') : ''}
-        <div class="field"><label>${STATE.lang==='ar'?'قالب اللغة':'Template Language'}</label><select id="wa-lang"><option value="en" ${cfg.templateLanguage==='en'?'selected':''}>English</option><option value="ar" ${cfg.templateLanguage==='ar'?'selected':''}>العربية</option></select></div>
         <button class="btn btn-primary btn-sm" onclick="waSaveConfig()">${STATE.lang==='ar'?'حفظ الإعداد':'Save Configuration'}</button>
-        <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'بيانات الاعتماد تُحفظ داخل هذه الجلسة فقط ولا تُعرض في السجلات العادية. لا توجد بيانات اعتماد مضمّنة في الكود.':'Credentials are held only for this session and never appear in normal logs. No credentials are hard-coded in the source.'}</div>
+        <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'بيانات الاعتماد الفعلية (Twilio Account SID / Auth Token) تبقى فقط في متغيرات بيئة Vercel، ولا تُرسل أو تُخزّن من هذه الشاشة.':'The real credentials (Twilio Account SID / Auth Token) live only in Vercel Environment Variables — this screen never transmits or stores them.'}</div>
       </div>
     </div>
   </div>
 
-  <div class="card" style="margin:16px 0;">
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">2. ${STATE.lang==='ar'?'اختبار اتصال واتساب':'WhatsApp Connection Test'}</h3>
+  <div class="card" style="margin-bottom:16px;">
     <div class="card-head"><h3>${STATE.lang==='ar'?'رقم المستلم للاختبار':'Test Recipient Mobile Number'}</h3>
       <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;"><input type="checkbox" id="wa-testmode" ${cfg.testMode?'checked':''} onchange="waSetTestMode(this.checked)"> ${STATE.lang==='ar'?'وضع الاختبار':'Test Mode'}</label>
     </div>
     <div class="card-pad">
       <div class="field"><label>+966XXXXXXXXX</label><input id="wa-testnumber" value="${esc(cfg.testRecipient)}" placeholder="+9665XXXXXXXX"></div>
       <button class="btn btn-ghost btn-sm" onclick="waSaveTestNumber()">${STATE.lang==='ar'?'حفظ الرقم':'Save Number'}</button>
-      <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'في وضع الاختبار، تُرسل كل الإشعارات التجريبية إلى هذا الرقم فقط ولا تصبح تلقائيًا رقم الإنتاج.':'While Test Mode is on, all test notifications go only to this number — it never automatically becomes the production recipient.'}</div>
+      <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'هذا القسم لفحص الاتصال بـ Twilio فقط. للإرسال الفعلي لأي جولة أو عضو استخدمي «الإرسال اليدوي عبر واتساب» أدناه.':'This section only checks Twilio connectivity. For real production sends to a round or member, use "Manual WhatsApp Send" below.'}</div>
       <hr class="sep">
       <div class="btn-row">
         <button class="btn btn-primary btn-sm" onclick="waTestConnection()">${STATE.lang==='ar'?'اختبار الاتصال':'Test Connection'}</button>
         <button class="btn btn-primary btn-sm" onclick="waSendTestMessage(); render();">${STATE.lang==='ar'?'إرسال رسالة اختبار':'Send Test Message'}</button>
       </div>
-      <hr class="sep">
-      <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;">${STATE.lang==='ar'?'اختبار التذكيرات الآلية':'Test Automatic Reminder'}</div>
+    </div>
+  </div>
+
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">3. ${STATE.lang==='ar'?'الإرسال اليدوي عبر واتساب':'Manual WhatsApp Send'}</h3>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-head"><h3>${STATE.lang==='ar'?'إرسال إشعار جولة يدويًا في أي وقت':'Send a round notification manually, any time'}</h3></div>
+    <div class="card-pad">
+      <div class="field"><label>${STATE.lang==='ar'?'اختيار الجولة':'Select Round'} <span class="req">*</span></label>
+        <select id="ms-round" onchange="onManualRoundChange(this.value)">
+          ${WA_ADMIN_STATE.rounds.map(r=>`<option value="${r.id}" ${String(r.id)===String(WA_ADMIN_STATE.selectedRoundId)?'selected':''}>${esc(r.id)} – ${STATE.lang==='ar'?'جولة سلامة المرضى':'Patient Safety Round'} – ${fmtDate(r.planned_date)} – ${r.planned_time}</option>`).join('') || `<option value="">${STATE.lang==='ar'?'لا توجد جولات محفوظة':'No rounds saved yet'}</option>`}
+        </select>
+      </div>
+      ${round? `<div class="side-note" style="margin-bottom:14px;font-size:11.5px;">
+        <b>${esc(round.id)}</b> · ${round.departments.map(deptName).join(' + ')} · ${fmtDate(round.planned_date)} ${round.planned_time} · ${roundStatusBadge? '' : ''}${esc(round.status)}<br>
+        ${STATE.lang==='ar'?'رابط الجولة الآمن':'Direct round URL'}: <span style="font-family:monospace;">${window.location.origin}/round/${esc(round.secure_token||'—')}</span>
+      </div>`:''}
+
+      <div class="field"><label>${STATE.lang==='ar'?'نوع المستلم':'Recipient Type'}</label>
+        <div class="pill-tabs">
+          <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='mobile'?'active':''}" onclick="setManualRecipientType('mobile')">${STATE.lang==='ar'?'إدخال رقم جوال':'Enter Mobile Number'}</div>
+          <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='single'?'active':''}" onclick="setManualRecipientType('single')">${STATE.lang==='ar'?'اختيار عضو موجود':'Select Existing Member'}</div>
+          <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='multiple'?'active':''}" onclick="setManualRecipientType('multiple')">${STATE.lang==='ar'?'اختيار عدة أعضاء':'Select Multiple Members'}</div>
+        </div>
+      </div>
+
+      ${WA_ADMIN_STATE.recipientType==='mobile'? `<div class="field"><label>${STATE.lang==='ar'?'رقم الجوال':'Mobile Number'}</label><input id="ms-mobile" value="${esc(WA_ADMIN_STATE.manualNumber)}" placeholder="+9665XXXXXXXX" onchange="WA_ADMIN_STATE.manualNumber=this.value; go('admin',{tab:'whatsapp'})"></div>` : ''}
+      ${WA_ADMIN_STATE.recipientType==='single'? `<div class="field"><label>${STATE.lang==='ar'?'العضو':'Member'}</label><select id="ms-member" onchange="onManualSingleMemberChange(this.value)">
+          <option value="">${STATE.lang==='ar'?'اختر عضوًا':'Select a member'}</option>
+          ${ROUND_MEMBERS.map(m=>`<option value="${m.id}" ${String(m.id)===String(WA_ADMIN_STATE.selectedMemberId)?'selected':''}>${esc(m.full_name)} – ${esc(m.job_title||'—')} – ${esc(m.mobile||(STATE.lang==='ar'?'لا يوجد جوال':'no mobile'))}</option>`).join('')}
+        </select></div>` : ''}
+      ${WA_ADMIN_STATE.recipientType==='multiple'? `<div class="field"><label>${STATE.lang==='ar'?'الأعضاء':'Members'}</label><select id="ms-members" multiple size="6" onchange="onManualMultiMemberChange(this)">
+          ${ROUND_MEMBERS.map(m=>`<option value="${m.id}" ${WA_ADMIN_STATE.selectedMemberIds.includes(String(m.id))?'selected':''}>${esc(m.full_name)} – ${esc(m.job_title||'—')} – ${esc(m.mobile||(STATE.lang==='ar'?'لا يوجد جوال':'no mobile'))}</option>`).join('')}
+        </select></div>` : ''}
+
+      <div class="field-row">
+        <div class="field"><label>${STATE.lang==='ar'?'لغة الرسالة':'Message Language'}</label>
+          <select id="ms-lang" onchange="WA_ADMIN_STATE.language=this.value; go('admin',{tab:'whatsapp'})">
+            <option value="ar" ${WA_ADMIN_STATE.language==='ar'?'selected':''}>${STATE.lang==='ar'?'العربية':'Arabic'}</option>
+            <option value="en" ${WA_ADMIN_STATE.language==='en'?'selected':''}>${STATE.lang==='ar'?'الإنجليزية':'English'}</option>
+          </select>
+        </div>
+        <div class="field"><label>${STATE.lang==='ar'?'قالب WhatsApp':'WhatsApp Template'}</label>
+          <select id="ms-template" onchange="WA_ADMIN_STATE.templateName=this.value; go('admin',{tab:'whatsapp'})">
+            ${WA_ADMIN_STATE.templates.map(t=>`<option value="${t.name}" ${t.name===WA_ADMIN_STATE.templateName?'selected':''}>${t.name} (${t.status})</option>`).join('') || `<option value="">${STATE.lang==='ar'?'لا توجد قوالب':'No templates'}</option>`}
+          </select>
+        </div>
+      </div>
+      ${selectedTemplate? `<div style="margin-bottom:10px;"><span class="badge ${selectedTemplate.status==='Approved'?'b-green':selectedTemplate.status==='Rejected'?'b-red':'b-amber'}">${STATE.lang==='ar'?'حالة القالب':'Template status'}: ${selectedTemplate.status}</span>${!templateOk?` <span class="muted" style="font-size:11px;">${STATE.lang==='ar'?'— لا يمكن الإرسال حتى تُعتمد القالب من الإدارة (القسم 6 أدناه)':'— sending is blocked until this template is Approved (Section 6 below)'}</span>`:''}</div>`:''}
+
+      <div class="field"><label>${STATE.lang==='ar'?'معاينة الرسالة':'Message Preview'}</label>
+        <div class="side-note" style="white-space:pre-wrap;font-size:11.8px;">${esc(manualMessagePreviewText())}</div>
+      </div>
+
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn btn-primary btn-sm" ${!round||!templateOk?'disabled':''} onclick="confirmManualSend(0)">${STATE.lang==='ar'?'إرسال الآن':'Send Now'}</button>
+        <button class="btn btn-ghost btn-sm" ${!round||!templateOk?'disabled':''} onclick="confirmManualSend(60000)">${STATE.lang==='ar'?'إرسال بعد دقيقة':'Send After 1 Minute'}</button>
+        <button class="btn btn-ghost btn-sm" ${!round||!templateOk?'disabled':''} onclick="confirmManualSend(300000)">${STATE.lang==='ar'?'إرسال بعد 5 دقائق':'Send After 5 Minutes'}</button>
+      </div>
+      <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'الإرسال المؤجل (بعد دقيقة/5 دقائق) يعمل عبر مؤقّت في هذا المتصفح — يجب إبقاء الصفحة مفتوحة حتى وقت الإرسال.':'Delayed sends (1/5 minutes) run as a timer in this browser tab — keep the page open until the send time.'}</div>
+      <div id="ms-result"></div>
+    </div>
+  </div>
+
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">4. ${STATE.lang==='ar'?'إعدادات التذكير التلقائي':'Automatic Reminder Settings'}</h3>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-head"><h3>${STATE.lang==='ar'?'الجدولة التلقائية':'Automatic Schedule'}</h3></div>
+    <div class="card-pad">
+      <div class="muted" style="font-size:12px;margin-bottom:12px;">${STATE.lang==='ar'?'عند جدولة جولة وربط أعضاء مفعّل لديهم واتساب، يُنشئ النظام تلقائيًا تذكيرًا قبل 24 ساعة وتذكيرًا قبل ساعة واحدة، ويرسلهما Cron يعمل كل 5 دقائق. هذا القسم للاختبار فقط ولا يغيّر الجدولة الفعلية.':'When a round is scheduled with WhatsApp-enabled members linked, the system automatically creates a 24-hour and a 1-hour reminder, sent by a cron job running every 5 minutes. This section is for testing only and does not change the real schedule.'}</div>
+      <div style="font-weight:700;font-size:12.5px;margin-bottom:8px;">${STATE.lang==='ar'?'اختبار محرك التذكيرات':'Test the Reminder Engine'}</div>
       <div class="btn-row">
         <button class="btn btn-ghost btn-sm" onclick="waTestReminder('24h','immediate')">${STATE.lang==='ar'?'محاكاة تذكير 24 ساعة':'Simulate 24-hour reminder'}</button>
         <button class="btn btn-ghost btn-sm" onclick="waTestReminder('1h','immediate')">${STATE.lang==='ar'?'محاكاة تذكير ساعة واحدة':'Simulate 1-hour reminder'}</button>
       </div>
-      <div class="btn-row" style="margin-top:6px;">
-        ${['Send immediately','After 1 minute','After 5 minutes','After 15 minutes','After 30 minutes'].map(d=>`<button class="btn btn-ghost btn-sm" onclick="waTestReminder('24h','${d}')">${STATE.lang==='ar'?d:d}</button>`).join('')}
-      </div>
     </div>
   </div>
 
-  <div class="card" style="margin-top:16px;">
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">5. ${t('round_reminders_nav')==='Send Round Reminders'?'Patient Safety Rounds Members':'أعضاء جولات سلامة المرضى'}</h3>
+  <div class="card" style="margin-bottom:16px;">
     <div class="card-head"><h3>${STATE.lang==='ar'?'أعضاء جولات سلامة المرضى':'Patient Safety Rounds Members'}</h3>
       <button class="btn btn-primary btn-sm" onclick="openMemberForm()">＋ ${STATE.lang==='ar'?'إضافة عضو':'Add Member'}</button>
     </div>
@@ -3174,7 +3365,7 @@ function adminWhatsApp(){
       ${!ROUND_MEMBERS_LOADED? `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل من قاعدة البيانات...':'Loading from the database…'}</div>` :
       ROUND_MEMBERS.length? `<div class="table-wrap"><table><thead><tr>
         <th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'المسمى الوظيفي':'Job Title'}</th><th>${STATE.lang==='ar'?'القسم':'Department'}</th>
-        <th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp'}</th><th>${STATE.lang==='ar'?'نشط':'Active'}</th><th></th>
+        <th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp'}</th><th>${STATE.lang==='ar'?'نشط':'Active'}</th><th>${STATE.lang==='ar'?'اختبار':'Test'}</th><th></th>
       </tr></thead><tbody>
       ${ROUND_MEMBERS.map(m=>`<tr>
         <td>${esc(m.full_name)}</td><td>${esc(m.job_title||'—')}</td><td>${m.department==='ALL'?(STATE.lang==='ar'?'الكل':'All'):deptName(m.department)}</td>
@@ -3182,6 +3373,7 @@ function adminWhatsApp(){
         <td><select onchange="updateRoundMember('${m.id}',{preferred_language:this.value})"><option value="ar" ${m.preferred_language==='ar'?'selected':''}>AR</option><option value="en" ${m.preferred_language==='en'?'selected':''}>EN</option></select></td>
         <td><input type="checkbox" ${m.whatsapp_enabled?'checked':''} onchange="updateRoundMember('${m.id}',{whatsapp_enabled:this.checked})"></td>
         <td><input type="checkbox" ${m.active?'checked':''} onchange="updateRoundMember('${m.id}',{active:this.checked})"></td>
+        <td>${m.mobile? waMeButtonHtml(m.mobile, (m.preferred_language==='ar'?'رسالة اختبار من نظام إدارة جولات سلامة المرضى — مستشفى الولادة والأطفال، حفر الباطن.':'This is a test message from the Patient Safety Rounds Management System — Maternity & Children Hospital, Hafr Al Batin.'), STATE.lang==='ar'?'اختبار':'Test') : '—'}</td>
         <td class="right"><button class="small-btn-icon" onclick="openMemberForm('${m.id}')" title="Edit">✎</button> <button class="small-btn-icon" onclick="deleteRoundMember('${m.id}')" title="Delete">🗑️</button></td>
       </tr>`).join('')}
       </tbody></table></div>` :
@@ -3190,19 +3382,139 @@ function adminWhatsApp(){
     </div>
   </div>
 
-  <div class="grid g2" style="margin-top:16px;">
-    <div class="card">
-      <div class="card-head"><h3>${STATE.lang==='ar'?'قوالب WhatsApp':'WhatsApp Templates'}</h3></div>
-      <div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'القالب':'Template'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th></tr></thead><tbody>
-      ${WHATSAPP_TEMPLATES.map(t=>`<tr><td>${t.name}</td><td><span class="badge b-grey">${t.status}</span></td></tr>`).join('')}
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">6. ${STATE.lang==='ar'?'قوالب WhatsApp':'WhatsApp Templates'}</h3>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-head"><h3>${STATE.lang==='ar'?'حالة اعتماد القوالب':'Template Approval Status'}</h3></div>
+    <div class="card-pad">
+      <div class="info-banner">${STATE.lang==='ar'?'النظام لا يتحقق تلقائيًا من حالة الاعتماد الحقيقية لدى Meta. علّمي القالب «معتمد» فقط بعد التأكد من اعتماده داخل لوحة Twilio — الإرسال اليدوي يُمنع تلقائيًا لأي قالب غير معتمد.':'The system cannot automatically verify real approval status with Meta. Mark a template Approved only after confirming it in the Twilio console — Manual Send is automatically blocked for any non-Approved template.'}</div>
+      <div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'القالب':'Template'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th></tr></thead><tbody>
+      ${WA_ADMIN_STATE.templates.map(tpl=>`<tr><td>${esc(tpl.name)}</td><td>${(tpl.language||'ar').toUpperCase()}</td><td>
+        <select onchange="updateTemplateStatus('${tpl.name}', this.value)">
+          <option value="Pending" ${tpl.status==='Pending'?'selected':''}>${STATE.lang==='ar'?'قيد المراجعة':'Pending'}</option>
+          <option value="Approved" ${tpl.status==='Approved'?'selected':''}>${STATE.lang==='ar'?'معتمد':'Approved'}</option>
+          <option value="Rejected" ${tpl.status==='Rejected'?'selected':''}>${STATE.lang==='ar'?'مرفوض':'Rejected'}</option>
+        </select>
+      </td></tr>`).join('') || `<tr><td colspan="3"><div class="empty">${STATE.lang==='ar'?'لا توجد قوالب':'No templates yet'}</div></td></tr>`}
       </tbody></table></div>
     </div>
-    <div class="card">
-      <div class="card-head"><h3>${STATE.lang==='ar'?'من يستلم تذكيرات هذه الجولة':'Who Receives Round Reminders'}</h3></div>
-      <div class="card-pad muted" style="font-size:11.8px;">${STATE.lang==='ar'?'يستلم التذكيرات فقط الأعضاء المفعّل لديهم واتساب والمرتبطون بالجولة تحديدًا عند الجدولة. أدر التفعيل والجوال من الجدول على اليسار.':'Only members with WhatsApp enabled, and who are linked to a specific round at scheduling time, receive its reminders. Manage enablement and mobile numbers in the table to the left.'}</div>
+  </div>
+
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">7. ${STATE.lang==='ar'?'سجل رسائل الواتساب اليدوية':'Manual WhatsApp Message History'}</h3>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-pad" style="display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--line-soft);">
+      <select id="mh-filter-round" onchange="filterManualHistory()"><option value="">${STATE.lang==='ar'?'كل الجولات':'All Rounds'}</option>${[...new Set(WA_ADMIN_STATE.manualHistory.map(m=>m.round_id))].map(r=>`<option value="${r}">${r}</option>`).join('')}</select>
+      <select id="mh-filter-status" onchange="filterManualHistory()"><option value="">${STATE.lang==='ar'?'كل الحالات':'All Statuses'}</option><option value="sent">Sent</option><option value="failed">Failed</option><option value="pending">Pending</option></select>
+      <input id="mh-filter-recipient" placeholder="${STATE.lang==='ar'?'رقم المستلم':'Recipient number'}" oninput="filterManualHistory()">
     </div>
+    <div class="table-wrap"><table id="mh-table"><thead><tr>
+      <th>${STATE.lang==='ar'?'التاريخ/الوقت':'Date/Time'}</th><th>${STATE.lang==='ar'?'الجولة':'Round'}</th><th>${STATE.lang==='ar'?'اسم المستلم':'Recipient Name'}</th><th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th>
+      <th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'القالب':'Template'}</th><th>${STATE.lang==='ar'?'أُرسلت بواسطة':'Sent By'}</th>
+      <th>${STATE.lang==='ar'?'رقم الرسالة':'Message SID'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'سبب الفشل':'Failure Reason'}</th>
+    </tr></thead><tbody>
+    ${WA_ADMIN_STATE.manualHistory.map(m=>`<tr data-round="${esc(m.round_id||'')}" data-status="${esc(m.status)}" data-recipient="${esc(m.recipient_mobile||'')}">
+      <td class="nowrap">${m.created_at? fmtDateTime(new Date(m.created_at)):'—'}</td><td>${esc(m.round_id||'—')}</td><td>${esc(m.recipient_name||'—')}</td><td>${esc(m.recipient_mobile||'—')}</td>
+      <td>${(m.language||'').toUpperCase()}</td><td>${esc(m.template_name||'—')}</td><td>${esc(m.sent_by||'—')}</td>
+      <td class="muted" style="font-size:11px;">${esc(m.message_sid||'—')}</td>
+      <td><span class="badge ${m.status==='sent'?'b-green':m.status==='failed'?'b-red':'b-grey'}">${m.status}</span></td>
+      <td class="muted" style="font-size:11px;">${esc(m.failure_reason||'—')}</td>
+    </tr>`).join('') || `<tr><td colspan="10"><div class="empty">${STATE.lang==='ar'?'لا توجد رسائل يدوية بعد':'No manual messages sent yet'}</div></td></tr>`}
+    </tbody></table></div>
+  </div>
+
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">8. ${STATE.lang==='ar'?'سجل الإشعارات التلقائية':'Automatic Notification History'}</h3>
+  <div class="card">
+    <div class="card-pad muted" style="font-size:11px;border-bottom:1px solid var(--line-soft);">${STATE.lang==='ar'?'بيانات حقيقية من جدول whatsapp_reminders — التذكيرات قبل 24/1 ساعة وتذكيرات الخطط التصحيحية.':'Real data from the whatsapp_reminders table — 24h/1h round reminders and corrective-plan due/overdue reminders.'}</div>
+    <div class="table-wrap"><table><thead><tr>
+      <th>${STATE.lang==='ar'?'النوع':'Type'}</th><th>${STATE.lang==='ar'?'الجولة':'Round'}</th><th>${STATE.lang==='ar'?'المستلم':'Recipient'}</th>
+      <th>${STATE.lang==='ar'?'موعد الإرسال':'Scheduled'}</th><th>${STATE.lang==='ar'?'وقت الإرسال':'Sent'}</th>
+      <th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'رقم الرسالة':'Message SID'}</th><th>${STATE.lang==='ar'?'الخطأ':'Error'}</th>
+    </tr></thead><tbody>
+    ${WA_ADMIN_STATE.autoHistory.map(l=>`<tr>
+      <td>${esc(l.reminder_type||'—')}</td><td>${esc(l.round_id||'—')}</td><td>${esc(l.recipient_name||l.recipient_phone||'—')}</td>
+      <td class="nowrap">${l.scheduled_at? fmtDateTime(new Date(l.scheduled_at)):'—'}</td><td class="nowrap">${l.sent_at? fmtDateTime(new Date(l.sent_at)):'—'}</td>
+      <td><span class="badge ${l.status==='sent'?'b-green':l.status==='failed'?'b-red':l.status==='pending'?'b-blue':'b-grey'}">${esc(l.status)}</span></td>
+      <td class="muted" style="font-size:11px;">${esc(l.twilio_message_sid||'—')}</td><td class="muted" style="font-size:11px;">${esc(l.error_message||'—')}</td>
+    </tr>`).join('') || `<tr><td colspan="8"><div class="empty">${STATE.lang==='ar'?'لا توجد سجلات بعد':'No records yet'}</div></td></tr>`}
+    </tbody></table></div>
   </div>`;
 }
+
+function onManualRoundChange(id){ WA_ADMIN_STATE.selectedRoundId = id; go('admin',{tab:'whatsapp'}); }
+function setManualRecipientType(t){ WA_ADMIN_STATE.recipientType = t; go('admin',{tab:'whatsapp'}); }
+function onManualSingleMemberChange(id){
+  WA_ADMIN_STATE.selectedMemberId = id;
+  const m = ROUND_MEMBERS.find(x=>String(x.id)===String(id));
+  if(m && m.preferred_language) WA_ADMIN_STATE.language = m.preferred_language;
+  go('admin',{tab:'whatsapp'});
+}
+function onManualMultiMemberChange(el){
+  WA_ADMIN_STATE.selectedMemberIds = Array.from(el.selectedOptions).map(o=>o.value);
+  go('admin',{tab:'whatsapp'});
+}
+function filterManualHistory(){
+  const round = document.getElementById('mh-filter-round').value;
+  const status = document.getElementById('mh-filter-status').value;
+  const recipient = document.getElementById('mh-filter-recipient').value.trim();
+  document.querySelectorAll('#mh-table tbody tr').forEach(tr=>{
+    const ok = (!round||tr.dataset.round===round) && (!status||tr.dataset.status===status) && (!recipient||(tr.dataset.recipient||'').includes(recipient));
+    tr.style.display = ok? '' : 'none';
+  });
+}
+async function updateTemplateStatus(name, status){
+  try{
+    const res = await fetch('/api/whatsapp-templates?name='+encodeURIComponent(name), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status, actor: currentActorName()}) });
+    const data = await res.json();
+    if(!res.ok || !data.success){ toast(data.error||'Failed'); return; }
+    const tpl = WA_ADMIN_STATE.templates.find(t=>t.name===name); if(tpl) tpl.status = status;
+    toast(STATE.lang==='ar'?'تم تحديث حالة القالب':'Template status updated');
+    go('admin',{tab:'whatsapp'});
+  } catch(error){ toast(STATE.lang==='ar'?'فشل التحديث':'Update failed'); }
+}
+function confirmManualSend(delayMs){
+  const round = selectedRound();
+  if(!round){ toast(STATE.lang==='ar'?'اختاري جولة':'Select a round'); return; }
+  const recipients = manualRecipients();
+  if(!recipients.length){ toast(STATE.lang==='ar'?'حددي مستلمًا واحدًا على الأقل':'Select at least one recipient'); return; }
+  const missingMobile = recipients.filter(r=>!r.mobile);
+  if(missingMobile.length){ toast(STATE.lang==='ar'?'يوجد مستلم بدون رقم جوال':'One or more recipients have no mobile number'); return; }
+  const names = recipients.map(r=>r.mobile).join('، ');
+  openModal(
+    STATE.lang==='ar'?'تأكيد الإرسال':'Confirm Send',
+    `<p style="font-size:12.8px;">${STATE.lang==='ar'?`هل أنت متأكدة من إرسال إشعار واتساب إلى: ${names} بخصوص الجولة ${round.id}؟`:`Send this WhatsApp notification to: ${names} for round ${round.id}?`}</p>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button class="btn btn-primary" onclick="closeModal(); executeManualSend(${delayMs})">${STATE.lang==='ar'?'تأكيد الإرسال':'Confirm Send'}</button>`
+  );
+}
+async function executeManualSend(delayMs){
+  const resultEl = document.getElementById('ms-result');
+  const round = selectedRound();
+  const recipients = manualRecipients();
+  const templateName = WA_ADMIN_STATE.templateName;
+  const language = WA_ADMIN_STATE.language;
+  if(resultEl) resultEl.innerHTML = `<div class="info-banner" style="margin-top:12px;">${delayMs>0? (STATE.lang==='ar'?`سيتم الإرسال خلال ${Math.round(delayMs/60000)} دقيقة — أبقي الصفحة مفتوحة...`:`Sending in ${Math.round(delayMs/60000)} minute(s) — keep this page open…`) : (STATE.lang==='ar'?'جارٍ الإرسال...':'Sending…')}</div>`;
+
+  const doSend = async () => {
+    try{
+      const res = await fetch('/api/whatsapp-manual-send', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ round_id: round.id, recipients, language, template_name: templateName, sent_by: currentActorName() })
+      });
+      const data = await res.json();
+      const rows = data.results || [];
+      const html = rows.map(r=>`<div style="padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:12px;">
+        <b>${esc(r.recipient_mobile)}</b> — <span class="badge ${r.status==='sent'?'b-green':'b-red'}">${r.status==='sent'?(STATE.lang==='ar'?'أُرسلت':'Sent'):(STATE.lang==='ar'?'فشلت':'Failed')}</span>
+        ${r.message_sid? ` · SID: ${esc(r.message_sid)}`:''}${r.failure_reason? ` · ${esc(r.failure_reason)}`:''}
+      </div>`).join('');
+      if(resultEl) resultEl.innerHTML = `<div class="card" style="margin-top:12px;"><div class="card-pad">${html || `<div class="empty">${esc(data.error||'No result')}</div>`}</div></div>`;
+      if(!res.ok && data.error){ toast(data.error); }
+      await renderWhatsAppAdminAsync();
+    } catch(error){
+      if(resultEl) resultEl.innerHTML = `<div class="esc-note" style="margin-top:12px;">${STATE.lang==='ar'?'تعذّر الإرسال':'Send failed'}: ${esc(error.message)}</div>`;
+    }
+  };
+
+  if(delayMs>0){ setTimeout(doSend, delayMs); } else { await doSend(); }
+}
+
 function waSetProvider(id){ WHATSAPP_CONFIG.provider = id; go('admin',{tab:'whatsapp'}); }
 function waSaveConfig(){
   const cfg = WHATSAPP_CONFIG;
@@ -3253,25 +3565,6 @@ async function submitMemberForm(id){
   if(id){ await updateRoundMember(id, payload); } else { await addRoundMember(payload); }
   closeModal();
   go('admin',{tab:'whatsapp'});
-}
-
-function adminWhatsAppLog(){
-  return `<div class="card">
-    <div class="card-head"><h3>${STATE.lang==='ar'?'سجل إشعارات WhatsApp':'WhatsApp Notification Log'}</h3></div>
-    ${WHATSAPP_LOG.length? `<div class="table-wrap"><table><thead><tr>
-      <th>ID</th><th>${STATE.lang==='ar'?'النوع':'Type'}</th><th>${STATE.lang==='ar'?'الجولة':'Round'}</th><th>${STATE.lang==='ar'?'المستلم':'Recipient'}</th>
-      <th>${STATE.lang==='ar'?'موعد الإرسال':'Scheduled'}</th><th>${STATE.lang==='ar'?'وقت الإرسال':'Sent'}</th><th>${STATE.lang==='ar'?'المزود':'Provider'}</th>
-      <th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'رقم الرسالة':'Message ID'}</th><th>${STATE.lang==='ar'?'الخطأ':'Error'}</th><th>${STATE.lang==='ar'?'إعادة المحاولة':'Retries'}</th><th></th>
-    </tr></thead><tbody>
-    ${WHATSAPP_LOG.map(l=>`<tr>
-      <td>${l.id}</td><td>${esc(l.type)}</td><td>${esc(l.roundId)}</td><td>${esc(l.recipientName)}</td>
-      <td class="nowrap">${esc(l.scheduledTime||'—')}</td><td class="nowrap">${esc(l.sentTime||'—')}</td><td>${esc(l.provider||'—')}</td>
-      <td><span class="badge ${l.status==='Failed'?'b-red':l.status==='Scheduled'?'b-blue':l.status==='Sent'||l.status==='Delivered'||l.status==='Read'?'b-green':'b-grey'}">${l.status}</span></td>
-      <td>${l.messageId||'—'}</td><td class="muted" style="font-size:11px;max-width:220px;">${esc(l.error||'—')}</td><td>${l.retryCount||0}</td>
-      <td>${l.status==='Failed'?`<button class="btn btn-ghost btn-sm" onclick="waRetry('${l.id}')">${STATE.lang==='ar'?'إعادة':'Retry'}</button>`:''}</td>
-    </tr>`).join('')}
-    </tbody></table></div>` : `<div class="empty">${STATE.lang==='ar'?'لا توجد سجلات بعد — استخدم اختبار الاتصال أو رسالة الاختبار من إعدادات WhatsApp':'No log entries yet — use Test Connection or Send Test Message from WhatsApp Settings'}</div>`}
-  </div>`;
 }
 
 function adminDepartments(){
@@ -3704,10 +3997,20 @@ async function decideObservation(id, decision){
           : (STATE.lang==='ar'?` — لم يُرسل واتساب: ${data.whatsapp?data.whatsapp.error:''}`:` — WhatsApp not sent: ${data.whatsapp?data.whatsapp.error:''}`);
       }
       toast(msg);
+      // Always offer the wa.me fallback too (works even if Twilio isn't configured),
+      // so Quality can send the corrective-plan request themselves in one click.
+      if(data.plan && payload.responsible_member_id){
+        const member = ROUND_MEMBERS.find(m=>String(m.id)===String(payload.responsible_member_id));
+        if(member && member.mobile){
+          const link = window.location.origin + '/plan/' + data.plan.secure_token;
+          const waMsg = waPlanRequestText(member.preferred_language||'ar', payload.responsible_department, data.observation.round_id, data.observation.observation_text, data.plan.start_date, data.plan.due_date, link);
+          offerWaMeModal(STATE.lang==='ar'?'إرسال طلب الخطة التصحيحية عبر واتساب':'Send Corrective Plan Request via WhatsApp', member, waMsg);
+        }
+      }
     } else {
       toast(STATE.lang==='ar'?'تم تسجيل القرار':'Decision recorded');
     }
-    viewQpsReviewAsync();
+    if(!document.getElementById('modal-layer').classList.contains('open')) viewQpsReviewAsync();
   } catch(error){ toast(STATE.lang==='ar'?'تعذّر الإرسال':'Request failed'); }
 }
 
@@ -3754,12 +4057,14 @@ async function viewPlansLiveAsync(){
     content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الخطط':'Could not load plans'}</b></div>`;
   }
 }
+let CURRENT_PLAN_VIEW = { plan:null, finding:null };
 async function viewPlanLiveDetailAsync(id){
   const content = document.getElementById('content');
   content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
   const res = await fetch('/api/plans?id='+encodeURIComponent(id));
   const data = await res.json();
   if(!data.success || !data.plan){ content.innerHTML = `<div class="card card-pad"><b>Not found</b></div>`; return; }
+  CURRENT_PLAN_VIEW = { plan: data.plan, finding: data.finding };
   const plan = data.plan, finding = data.finding, evidence = data.evidence || [];
   const isImage = (name)=> /\.(jpe?g|png|gif|webp)$/i.test(name||'');
   content.innerHTML = `
@@ -3840,6 +4145,7 @@ async function viewPlanLiveDetailAsync(id){
         <div class="field"><label><input type="checkbox" id="pl-effconf"> ${STATE.lang==='ar'?'تم تأكيد الفاعلية':'Effectiveness Confirmed'}</label></div>
         <button class="btn btn-ghost btn-sm" onclick="verifyPlanLiveEffectiveness('${plan.id}')">${STATE.lang==='ar'?'تسجيل التحقق':'Record Verification'}</button>
         <hr class="sep">
+        ${finding && finding.responsible_member_id? `<button class="btn btn-ghost btn-sm" onclick="offerWaMeReminderNow()">📤 ${STATE.lang==='ar'?'إرسال تذكير عبر واتساب':'Send Reminder via WhatsApp'}</button><hr class="sep">`:''}
         <button class="btn btn-primary btn-sm" onclick="planLiveAction('${plan.id}','close')">✓ ${STATE.lang==='ar'?'إغلاق الملاحظة':'Close Finding'}</button>
         <button class="btn btn-ghost btn-sm" onclick="planLiveActionWithReason('${plan.id}','reopen')">↺ ${STATE.lang==='ar'?'إعادة فتح':'Reopen'}</button>
       </div>
@@ -3853,11 +4159,23 @@ async function planLiveAction(id, action, extra){
     if(!res.ok || !data.success){
       if(data.reasons){ toast((STATE.lang==='ar'?'لا يمكن إغلاق الملاحظة: ':'Cannot close finding: ')+data.reasons.join(' ')); }
       else toast(data.error||'Failed');
-      return;
+      return false;
     }
     toast(data.whatsapp? (data.whatsapp.success? (STATE.lang==='ar'?'تم تنفيذ الإجراء وإرسال واتساب فعلي':'Action recorded and real WhatsApp sent') : (STATE.lang==='ar'?`تم تنفيذ الإجراء — لم يُرسل واتساب: ${data.whatsapp.error}`:`Action recorded — WhatsApp not sent: ${data.whatsapp.error}`)) : (STATE.lang==='ar'?'تم تنفيذ الإجراء':'Action recorded'));
-    viewPlanLiveDetailAsync(id);
-  } catch(error){ toast(STATE.lang==='ar'?'فشل الإجراء':'Action failed'); }
+    await viewPlanLiveDetailAsync(id);
+    return true;
+  } catch(error){ toast(STATE.lang==='ar'?'فشل الإجراء':'Action failed'); return false; }
+}
+function offerWaMeReminderNow(){
+  const { plan, finding } = CURRENT_PLAN_VIEW;
+  if(!plan || !finding || !finding.responsible_member_id){ toast(STATE.lang==='ar'?'لا يوجد شخص مسؤول مرتبط برقم جوال':'No linked responsible person with a mobile number'); return; }
+  const member = ROUND_MEMBERS.find(m=>String(m.id)===String(finding.responsible_member_id));
+  if(!member || !member.mobile){ toast(STATE.lang==='ar'?'لا يوجد رقم جوال محفوظ للمسؤول':'Responsible member has no saved mobile number'); return; }
+  const days = Math.round((parseD(plan.due_date) - parseD(todayStr()))/86400000);
+  const kind = days<0 ? 'overdue' : days===0 ? 'due_today' : 'before_due';
+  const link = window.location.origin + '/plan/' + plan.secure_token;
+  const msg = waPlanReminderText(member.preferred_language||'ar', kind, finding.department, finding.round_id, plan.due_date, link);
+  offerWaMeModal(STATE.lang==='ar'?'إرسال تذكير عبر واتساب':'Send Reminder via WhatsApp', member, msg);
 }
 function planLiveActionWithReason(id, action){
   openModal(STATE.lang==='ar'?'السبب':'Reason',
@@ -3868,7 +4186,19 @@ async function submitPlanLiveReason(id, action){
   const notes = document.getElementById('plr-notes').value.trim();
   if(!notes){ toast(STATE.lang==='ar'?'السبب مطلوب':'A reason is required'); return; }
   closeModal();
-  await planLiveAction(id, action, {notes});
+  const ok = await planLiveAction(id, action, {notes});
+  if(ok && ['return_revision','request_evidence'].includes(action)){
+    const { plan, finding } = CURRENT_PLAN_VIEW;
+    if(plan && finding && finding.responsible_member_id){
+      const member = ROUND_MEMBERS.find(m=>String(m.id)===String(finding.responsible_member_id));
+      if(member && member.mobile){
+        const link = window.location.origin + '/plan/' + plan.secure_token;
+        const kind = action==='return_revision' ? 'revision' : 'evidence';
+        const msg = waPlanReminderText(member.preferred_language||'ar', kind, finding.department, finding.round_id, plan.due_date, link);
+        offerWaMeModal(STATE.lang==='ar'?'إرسال إشعار عبر واتساب':'Send Notice via WhatsApp', member, msg);
+      }
+    }
+  }
 }
 async function verifyPlanLiveEffectiveness(id){
   await planLiveAction(id, 'verify_effectiveness', {
@@ -3943,6 +4273,59 @@ async function viewRoundFollowupAsync(department){
   document.getElementById('rf-results').innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
   const findings = await fetchPreviousFindings(department);
   document.getElementById('rf-results').innerHTML = `<div class="card"><div class="card-head"><h3>${deptName(department)}</h3><span class="hint">${findings.length}</span></div><div class="card-pad">${previousFollowUpTableHtml(findings)}</div></div>`;
+}
+
+/* ---------------- Send Round Reminders via wa.me (no Twilio required) ---------------- */
+async function viewRoundRemindersAsync(roundId){
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
+  try{
+    if(!roundId){
+      const res = await fetch('/api/rounds');
+      const data = await res.json();
+      const rounds = (data.success? data.rounds : []) || [];
+      content.innerHTML = `
+      <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${t('round_reminders_nav')}</h1><div class="sub">${STATE.lang==='ar'?'بدون Twilio — رسالة جاهزة تفتح واتساب وتضغطين إرسال':'No Twilio needed — opens WhatsApp with the message ready, you just press Send'}</div></div></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>${STATE.lang==='ar'?'رقم الجولة':'Round ID'}</th><th>${t('departments')}</th><th>${STATE.lang==='ar'?'التاريخ':'Date'}</th><th></th></tr></thead><tbody>
+      ${rounds.map(r=>`<tr><td>${esc(r.id)}</td><td>${(r.departments||[]).map(deptName).join(' + ')}</td><td>${fmtDate(r.planned_date)}</td>
+        <td class="right"><button class="btn btn-ghost btn-sm" onclick="go('round-reminders',{id:'${r.id}'})">${STATE.lang==='ar'?'فتح':'Open'}</button></td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${STATE.lang==='ar'?'لا توجد جولات محفوظة بعد':'No rounds saved yet'}</div></td></tr>`}
+      </tbody></table></div></div>`;
+      return;
+    }
+
+    const detailRes = await fetch('/api/rounds?id='+encodeURIComponent(roundId));
+    const detailData = await detailRes.json();
+    if(!detailData.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(detailData.error||'Round not found')}</b></div>`; return; }
+    const round = detailData.round;
+    const participants = (detailData.participants||[]).map(p=>p.round_members).filter(Boolean);
+    const link = window.location.origin + '/round/' + round.secure_token;
+
+    content.innerHTML = `
+    <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'} / ${esc(round.id)}</div><h1>${t('round_reminders_nav')}</h1>
+      <div class="sub">${round.departments.map(deptName).join(' + ')} · ${fmtDate(round.planned_date)} · ${round.planned_time}</div></div>
+    <button class="btn btn-ghost btn-sm" onclick="go('round-reminders')">← ${STATE.lang==='ar'?'رجوع':'Back'}</button></div>
+    <div class="info-banner">${STATE.lang==='ar'?'اضغطي زر الإرسال أمام أي عضو — بيفتح واتساب على جهازك مع الرسالة كاملة جاهزة، وما عليك غير الضغط على إرسال.':'Click the send button next to any member — WhatsApp opens on your device with the full message ready; you just press Send.'}</div>
+    <div class="card">
+      <div class="card-head"><h3>${STATE.lang==='ar'?'أعضاء الجولة':'Round Members'}</h3><span class="hint">${participants.length}</span></div>
+      <div class="table-wrap"><table><thead><tr>
+        <th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th>
+        <th>${STATE.lang==='ar'?'تذكير 24 ساعة':'24-Hour Reminder'}</th><th>${STATE.lang==='ar'?'تذكير ساعة واحدة':'1-Hour Reminder'}</th>
+      </tr></thead><tbody>
+      ${participants.length? participants.map(m=>{
+        const msg24 = waRoundReminderText(m.preferred_language||'ar','24h', round, link);
+        const msg1 = waRoundReminderText(m.preferred_language||'ar','1h', round, link);
+        return `<tr>
+          <td>${esc(m.full_name)}${m.job_title?' — '+esc(m.job_title):''}</td>
+          <td>${esc(m.mobile||'—')}</td>
+          <td>${waMeButtonHtml(m.mobile, msg24, STATE.lang==='ar'?'إرسال 24س':'Send 24h')}</td>
+          <td>${waMeButtonHtml(m.mobile, msg1, STATE.lang==='ar'?'إرسال 1س':'Send 1h')}</td>
+        </tr>`;
+      }).join('') : `<tr><td colspan="4"><div class="empty">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة':'No members linked to this round'}</div></td></tr>`}
+      </tbody></table></div>
+    </div>`;
+  } catch(error){
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر التحميل':'Could not load'}</b></div>`;
+  }
 }
 
 /* ---------------- Live Executive Round Report ---------------- */
