@@ -11,20 +11,20 @@ import { sendTwilioMessageRaw } from "../lib/twilio-send.js";
 import { manualRoundMessage } from "../lib/messages.js";
 import { normalizeToE164 } from "../lib/phone.js";
 
-// Single WhatsApp endpoint.
-//
-// Supported actions:
-//
-// ?action=manual-send
-//   GET  -> Manual WhatsApp message history
-//   POST -> Send a Patient Safety Round WhatsApp message
-//
-// ?action=templates
-//   GET   -> List WhatsApp templates
-//   PATCH -> Update template approval status
-//
-// ?action=send
-//   POST -> Direct WhatsApp test/manual message
+/*
+  WhatsApp API - Patient Safety Rounds
+
+  ?action=manual-send
+    GET  -> WhatsApp message history
+    POST -> Send WhatsApp message for a round
+
+  ?action=templates
+    GET   -> List WhatsApp templates
+    PATCH -> Update template approval status
+
+  ?action=send
+    POST -> Direct WhatsApp test/manual message
+*/
 
 export default async function handler(req, res) {
   setCors(res);
@@ -54,11 +54,9 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    if (handleConfigError(res, error)) {
-      return;
-    }
+    if (handleConfigError(res, error)) return;
 
-    console.error("whatsapp API error:", error);
+    console.error("WhatsApp API error:", error);
 
     return res.status(500).json({
       success: false,
@@ -67,16 +65,13 @@ export default async function handler(req, res) {
   }
 }
 
-
-// =====================================================
-// action=templates
-// Formerly: api/whatsapp-templates.js
-// =====================================================
+/* =========================================================
+   TEMPLATES
+   ========================================================= */
 
 async function handleTemplates(req, res) {
 
   if (req.method === "GET") {
-
     const templates = await sbGet(
       "whatsapp_templates",
       "?order=name.asc"
@@ -87,7 +82,6 @@ async function handleTemplates(req, res) {
       templates
     });
   }
-
 
   if (req.method === "PATCH") {
 
@@ -100,9 +94,11 @@ async function handleTemplates(req, res) {
       });
     }
 
-    const b = req.body || {};
+    const body = req.body || {};
 
-    if (!["Approved", "Pending", "Rejected"].includes(b.status)) {
+    if (
+      !["Approved", "Pending", "Rejected"].includes(body.status)
+    ) {
       return res.status(400).json({
         success: false,
         error: "status must be Approved, Pending or Rejected."
@@ -113,7 +109,7 @@ async function handleTemplates(req, res) {
       "whatsapp_templates",
       `?name=eq.${encodeURIComponent(name)}`,
       {
-        status: b.status,
+        status: body.status,
         updated_at: new Date().toISOString()
       }
     );
@@ -122,9 +118,9 @@ async function handleTemplates(req, res) {
       action: "WhatsApp Template Status Changed",
       entity_type: "whatsapp_template",
       entity_id: name,
-      actor: b.actor,
+      actor: body.actor,
       new_value: {
-        status: b.status
+        status: body.status
       }
     });
 
@@ -134,51 +130,42 @@ async function handleTemplates(req, res) {
     });
   }
 
-
   return res.status(405).json({
     success: false,
     error: "Method not allowed"
   });
 }
 
-
-// =====================================================
-// action=manual-send
-// Formerly: api/whatsapp-manual-send.js
-// =====================================================
+/* =========================================================
+   MANUAL SEND
+   ========================================================= */
 
 async function handleManualSend(req, res) {
-
-  // ---------------------------------------------------
-  // GET — Manual WhatsApp Message History
-  // ---------------------------------------------------
 
   if (req.method === "GET") {
 
     let query = "?order=created_at.desc&limit=200";
 
     if (req.query.round_id) {
-      query += `&round_id=eq.${encodeURIComponent(
-        req.query.round_id
-      )}`;
+      query +=
+        `&round_id=eq.${encodeURIComponent(req.query.round_id)}`;
     }
 
     if (req.query.status) {
-      query += `&status=eq.${encodeURIComponent(
-        req.query.status
-      )}`;
+      query +=
+        `&status=eq.${encodeURIComponent(req.query.status)}`;
     }
 
     if (req.query.recipient) {
-      query += `&recipient_mobile=ilike.*${encodeURIComponent(
-        req.query.recipient
-      )}*`;
+      query +=
+        `&recipient_mobile=ilike.*${encodeURIComponent(
+          req.query.recipient
+        )}*`;
     }
 
     if (req.query.date) {
-      query += `&created_at=gte.${encodeURIComponent(
-        req.query.date
-      )}`;
+      query +=
+        `&created_at=gte.${encodeURIComponent(req.query.date)}`;
     }
 
     const rows = await sbGet(
@@ -192,11 +179,6 @@ async function handleManualSend(req, res) {
     });
   }
 
-
-  // ---------------------------------------------------
-  // POST — Send Manual Round WhatsApp Message
-  // ---------------------------------------------------
-
   if (req.method !== "POST") {
     return res.status(405).json({
       success: false,
@@ -204,25 +186,18 @@ async function handleManualSend(req, res) {
     });
   }
 
+  const body = req.body || {};
 
-  const b = req.body || {};
-
-
-  // Validate round
-
-  if (!b.round_id) {
+  if (!body.round_id) {
     return res.status(400).json({
       success: false,
       error: "round_id is required."
     });
   }
 
-
-  // Validate recipients
-
   if (
-    !Array.isArray(b.recipients) ||
-    !b.recipients.length
+    !Array.isArray(body.recipients) ||
+    !body.recipients.length
   ) {
     return res.status(400).json({
       success: false,
@@ -230,30 +205,21 @@ async function handleManualSend(req, res) {
     });
   }
 
-
-  // Validate template
-
-  if (!b.template_name) {
+  if (!body.template_name) {
     return res.status(400).json({
       success: false,
       error: "template_name is required."
     });
   }
 
-
-  // ---------------------------------------------------
-  // Get WhatsApp Template
-  // ---------------------------------------------------
+  /* Check template */
 
   const templates = await sbGet(
     "whatsapp_templates",
-    `?name=eq.${encodeURIComponent(
-      b.template_name
-    )}`
+    `?name=eq.${encodeURIComponent(body.template_name)}`
   );
 
   const template = templates[0];
-
 
   if (!template) {
     return res.status(400).json({
@@ -262,32 +228,21 @@ async function handleManualSend(req, res) {
     });
   }
 
-
-  // Only Approved templates can be used
-
   if (template.status !== "Approved") {
-
     return res.status(400).json({
       success: false,
       error:
-        `Cannot send — template "${b.template_name}" ` +
-        `is not Approved (current status: ${template.status}). ` +
-        `Business-initiated WhatsApp messages require an approved template.`
+        `Cannot send — template "${body.template_name}" ` +
+        `is not Approved (current status: ${template.status}).`
     });
   }
 
-
-  // ---------------------------------------------------
-  // Get Patient Safety Round
-  // ---------------------------------------------------
+  /* Get round */
 
   const rounds = await sbGet(
     "rounds",
-    `?id=eq.${encodeURIComponent(
-      b.round_id
-    )}`
+    `?id=eq.${encodeURIComponent(body.round_id)}`
   );
-
 
   if (!rounds.length) {
     return res.status(404).json({
@@ -296,40 +251,22 @@ async function handleManualSend(req, res) {
     });
   }
 
-
   const round = rounds[0];
 
-
-  // ---------------------------------------------------
-  // Build Secure Round Link
-  // ---------------------------------------------------
+  /* Build secure round link */
 
   const proto =
-    req.headers["x-forwarded-proto"] ||
-    "https";
+    req.headers["x-forwarded-proto"] || "https";
 
   const host =
     req.headers.host ||
     "patient-safety-rounds.vercel.app";
 
-
   const link =
     `${proto}://${host}/round/${round.secure_token}`;
 
-
-  // ---------------------------------------------------
-  // Message Language
-  // ---------------------------------------------------
-
   const lang =
-    b.language === "en"
-      ? "en"
-      : "ar";
-
-
-  // ---------------------------------------------------
-  // Generate Message
-  // ---------------------------------------------------
+    body.language === "en" ? "en" : "ar";
 
   const message = manualRoundMessage({
     lang,
@@ -337,81 +274,46 @@ async function handleManualSend(req, res) {
     link
   });
 
-
-  // ---------------------------------------------------
-  // Send to Recipients
-  // ---------------------------------------------------
-
   const results = [];
 
+  /* Send to recipients */
 
-  for (const recipient of b.recipients) {
+  for (const recipient of body.recipients) {
 
     const mobile =
-      normalizeToE164(
-        recipient.mobile
-      );
-
+      normalizeToE164(recipient.mobile);
 
     const row = {
-
-      round_id:
-        b.round_id,
-
+      round_id: body.round_id,
       recipient_name:
         recipient.name || null,
-
       recipient_mobile:
         recipient.mobile || "",
-
-      language:
-        lang,
-
+      language: lang,
       template_name:
-        b.template_name,
-
+        body.template_name,
       sent_by:
-        b.sent_by ||
-        "Quality Admin",
-
-      status:
-        "pending"
+        body.sent_by || "Quality Admin",
+      status: "pending"
     };
-
-
-    // Invalid mobile
 
     if (!mobile) {
 
-      row.status =
-        "failed";
-
+      row.status = "failed";
       row.failure_reason =
         "Invalid mobile number format.";
 
-
-      const inserted =
-        await sbInsert(
-          "whatsapp_manual_messages",
-          [row]
-        );
-
-
-      results.push(
-        inserted[0]
+      const inserted = await sbInsert(
+        "whatsapp_manual_messages",
+        [row]
       );
+
+      results.push(inserted[0]);
 
       continue;
     }
 
-
-    row.recipient_mobile =
-      mobile;
-
-
-    // -------------------------------------------------
-    // Send WhatsApp
-    // -------------------------------------------------
+    row.recipient_mobile = mobile;
 
     const sendResult =
       await sendTwilioMessageRaw({
@@ -419,12 +321,9 @@ async function handleManualSend(req, res) {
         message
       });
 
-
     if (sendResult.success) {
 
-      row.status =
-        "sent";
-
+      row.status = "sent";
       row.message_sid =
         sendResult.sid;
 
@@ -433,103 +332,59 @@ async function handleManualSend(req, res) {
 
     } else {
 
-      row.status =
-        "failed";
-
+      row.status = "failed";
       row.failure_reason =
         sendResult.error;
     }
 
-
-    // -------------------------------------------------
-    // Store Message Log
-    // -------------------------------------------------
-
-    const inserted =
-      await sbInsert(
-        "whatsapp_manual_messages",
-        [row]
-      );
-
-
-    results.push(
-      inserted[0]
+    const inserted = await sbInsert(
+      "whatsapp_manual_messages",
+      [row]
     );
-  }
 
+    results.push(inserted[0]);
+  }
 
   const anySuccess =
     results.some(
-      (r) =>
-        r.status === "sent"
+      (result) => result.status === "sent"
     );
 
-
   return res.status(200).json({
-
-    success:
-      anySuccess,
-
+    success: anySuccess,
     results,
-
-    message_preview:
-      message
+    message_preview: message
   });
 }
 
-
-// =====================================================
-// action=send
-// Direct WhatsApp Test / Manual Message
-// Replaces api/send-whatsapp.js
-// =====================================================
+/* =========================================================
+   DIRECT TEST SEND
+   ========================================================= */
 
 async function handleDirectSend(req, res) {
 
   if (req.method !== "POST") {
-
     return res.status(405).json({
       success: false,
       error: "Method not allowed"
     });
   }
 
-
-  const body =
-    req.body || {};
-
-
-  // ---------------------------------------------------
-  // Validate / Normalize Recipient
-  // ---------------------------------------------------
+  const body = req.body || {};
 
   const to =
-    normalizeToE164(
-      body.to
-    );
-
+    normalizeToE164(body.to);
 
   if (!to) {
-
     return res.status(400).json({
       success: false,
       error: "Valid recipient number is required."
     });
   }
 
-
-  // ---------------------------------------------------
-  // Message
-  // ---------------------------------------------------
-
   const message =
     body.message ||
     "اختبار نظام جولات سلامة المرضى - تم الاتصال بخدمة WhatsApp بنجاح.";
-
-
-  // ---------------------------------------------------
-  // Send through Twilio
-  // ---------------------------------------------------
 
   const result =
     await sendTwilioMessageRaw({
@@ -537,9 +392,7 @@ async function handleDirectSend(req, res) {
       message
     });
 
-
   if (!result.success) {
-
     return res.status(500).json({
       success: false,
       error:
@@ -548,23 +401,13 @@ async function handleDirectSend(req, res) {
     });
   }
 
-
-  // ---------------------------------------------------
-  // Success
-  // ---------------------------------------------------
-
   return res.status(200).json({
-
-    success:
-      true,
-
-    sid:
-      result.sid,
-
+    success: true,
+    sid: result.sid,
     status:
-      result.status ||
-      "sent",
-
+      result.status || "sent",
     to
   });
 }
+
+// redeploy
