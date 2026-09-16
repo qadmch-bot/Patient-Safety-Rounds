@@ -3553,7 +3553,11 @@ function openMemberForm(id){
 }
 async function submitMemberForm(id){
   const full_name = document.getElementById('mf-name').value.trim();
-  if(!full_name){ toast(STATE.lang==='ar'?'الاسم مطلوب':'Name is required'); return; }
+  if(!full_name){
+    toast(STATE.lang==='ar'?'الاسم مطلوب':'Name is required');
+    return;
+  }
+
   const payload = {
     full_name,
     job_title: document.getElementById('mf-title').value.trim(),
@@ -3562,9 +3566,29 @@ async function submitMemberForm(id){
     preferred_language: document.getElementById('mf-lang').value,
     whatsapp_enabled: document.getElementById('mf-wa').value==='true',
   };
-  if(id){ await updateRoundMember(id, payload); } else { await addRoundMember(payload); }
-  closeModal();
-  go('admin',{tab:'whatsapp'});
+
+  try {
+    let savedMember = null;
+    if(id){
+      savedMember = await updateRoundMember(id, payload);
+    } else {
+      savedMember = await addRoundMember(payload);
+    }
+
+    if(!savedMember){
+      toast(STATE.lang==='ar'?'تعذر حفظ العضو. يرجى التحقق من البيانات والمحاولة مرة أخرى.':'Failed to save member. Please check the data and try again.');
+      return;
+    }
+
+    await loadRoundMembers();
+    closeModal();
+    go('admin',{tab:'whatsapp'});
+    render();
+    toast(STATE.lang==='ar'?'تم حفظ العضو بنجاح':'Member saved successfully');
+  } catch(error){
+    console.error('submitMemberForm error:', error);
+    toast(STATE.lang==='ar'?'حدث خطأ أثناء حفظ العضو: '+(error.message||''):'Error saving member: '+(error.message||''));
+  }
 }
 
 function adminDepartments(){
