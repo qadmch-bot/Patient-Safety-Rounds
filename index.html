@@ -647,7 +647,7 @@ function whatsappFailureMessage(detailError){
   return detailError ? `${base} (${detailError})` : base;
 }
 
-/* ---------------------------- WA.ME CLICK-TO-SEND (no API, no approval) ----------------------------
+/* ---------------------------- WHATSAPP SEND VIA TWILIO ----------------------------
    An official, ToS-safe alternative to the Twilio/API path: wa.me just opens the
    person's own WhatsApp with the message pre-filled — they still press Send
    themselves, so it is exactly the same as typing it manually. No credentials,
@@ -660,15 +660,38 @@ function waMeLink(phone, message){
   return `https://wa.me/${clean}?text=${encodeURIComponent(message)}`;
 }
 function waMeButtonHtml(phone, message, label){
-  const link = waMeLink(phone, message);
-  if(!link) return `<span class="badge b-grey">${STATE.lang==='ar'?'لا يوجد رقم جوال':'No mobile number'}</span>`;
-  return `<a class="btn btn-primary btn-sm" href="${link}" target="_blank" rel="noopener">📤 ${esc(label||(STATE.lang==='ar'?'إرسال عبر واتساب':'Send via WhatsApp'))}</a>`;
+  if(!phone) return `<span class="badge b-grey">${STATE.lang==='ar'?'لا يوجد رقم جوال':'No mobile number'}</span>`;
+  const p = encodeURIComponent(String(phone));
+  const m = encodeURIComponent(String(message || ''));
+  return `<button class="btn btn-primary btn-sm" type="button" onclick="waSendDirectTwilio(decodeURIComponent('${p}'),decodeURIComponent('${m}'))">📤 ${esc(label||(STATE.lang==='ar'?'إرسال عبر Twilio':'Send via Twilio'))}</button>`;
+}
+async function waSendDirectTwilio(phone, message){
+  if(!phone){
+    toast(STATE.lang==='ar'?'لا يوجد رقم جوال':'No mobile number');
+    return false;
+  }
+  toast(STATE.lang==='ar'?'جاري الإرسال عبر Twilio...':'Sending through Twilio...');
+  try{
+    const res = await fetch('/api/whatsapp?action=send', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({to:phone, message:message})
+    });
+    const data = await res.json();
+    if(!res.ok || !data.success) throw new Error(data.error || 'Twilio send failed');
+    toast(STATE.lang==='ar'?'تم إرسال الرسالة عبر Twilio بنجاح':'Message sent successfully through Twilio');
+    return true;
+  }catch(error){
+    console.error('Twilio direct send error:', error);
+    toast((STATE.lang==='ar'?'فشل الإرسال عبر Twilio: ':'Twilio send failed: ') + (error.message || 'Unknown error'));
+    return false;
+  }
 }
 function offerWaMeModal(title, member, message){
   openModal(title,
-    `<p style="font-size:12.5px;margin-bottom:14px;">${STATE.lang==='ar'?'اضغطي الزر لفتح واتساب مع الرسالة جاهزة لـ':'Click the button to open WhatsApp with the message ready for'} <b>${esc(member.full_name)}</b>.</p>
+    `<p style="font-size:12.5px;margin-bottom:14px;">${STATE.lang==='ar'?'اضغطي الزر لإرسال الرسالة عبر Twilio إلى':'Click the button to send the message through Twilio to'} <b>${esc(member.full_name)}</b>.</p>
      <div class="side-note" style="white-space:pre-wrap;font-size:11.5px;max-height:220px;overflow-y:auto;">${esc(message)}</div>`,
-    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إغلاق':'Close'}</button>${waMeButtonHtml(member.mobile, message, STATE.lang==='ar'?'فتح واتساب':'Open WhatsApp')}`
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إغلاق':'Close'}</button>${waMeButtonHtml(member.mobile, message, STATE.lang==='ar'?'إرسال عبر Twilio':'Send via Twilio')}`
   );
 }
 // Message text builders — mirror lib/messages.js exactly, but run client-side
@@ -748,7 +771,7 @@ async function waSendTestMessage(){
   );
 
   try {
-    const response = await fetch('/api/send-whatsapp', {
+    const response = await fetch('/api/whatsapp?action=send', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -3553,11 +3576,7 @@ function openMemberForm(id){
 }
 async function submitMemberForm(id){
   const full_name = document.getElementById('mf-name').value.trim();
-  if(!full_name){
-    toast(STATE.lang==='ar'?'الاسم مطلوب':'Name is required');
-    return;
-  }
-
+  if(!full_name){ toast(STATE.lang==='ar'?'الاسم مطلوب':'Name is required'); return; }
   const payload = {
     full_name,
     job_title: document.getElementById('mf-title').value.trim(),
@@ -3566,29 +3585,9 @@ async function submitMemberForm(id){
     preferred_language: document.getElementById('mf-lang').value,
     whatsapp_enabled: document.getElementById('mf-wa').value==='true',
   };
-
-  try {
-    let savedMember = null;
-    if(id){
-      savedMember = await updateRoundMember(id, payload);
-    } else {
-      savedMember = await addRoundMember(payload);
-    }
-
-    if(!savedMember){
-      toast(STATE.lang==='ar'?'تعذر حفظ العضو. يرجى التحقق من البيانات والمحاولة مرة أخرى.':'Failed to save member. Please check the data and try again.');
-      return;
-    }
-
-    await loadRoundMembers();
-    closeModal();
-    go('admin',{tab:'whatsapp'});
-    render();
-    toast(STATE.lang==='ar'?'تم حفظ العضو بنجاح':'Member saved successfully');
-  } catch(error){
-    console.error('submitMemberForm error:', error);
-    toast(STATE.lang==='ar'?'حدث خطأ أثناء حفظ العضو: '+(error.message||''):'Error saving member: '+(error.message||''));
-  }
+  if(id){ await updateRoundMember(id, payload); } else { await addRoundMember(payload); }
+  closeModal();
+  go('admin',{tab:'whatsapp'});
 }
 
 function adminDepartments(){
