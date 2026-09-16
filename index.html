@@ -3176,8 +3176,8 @@ async function renderWhatsAppAdminAsync(){
   try{
     const [roundsRes, templatesRes, manualRes, autoRes] = await Promise.all([
       fetch('/api/rounds').then(r=>r.json()).catch(()=>({success:false})),
-      fetch('/api/whatsapp-templates').then(r=>r.json()).catch(()=>({success:false})),
-      fetch('/api/whatsapp-manual-send').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/whatsapp?action=templates').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/whatsapp?action=manual-send').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/whatsapp-reminders-log').then(r=>r.json()).catch(()=>({success:false})),
     ]);
     WA_ADMIN_STATE.rounds = roundsRes.success? roundsRes.rounds : [];
@@ -3462,7 +3462,7 @@ function filterManualHistory(){
 }
 async function updateTemplateStatus(name, status){
   try{
-    const res = await fetch('/api/whatsapp-templates?name='+encodeURIComponent(name), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status, actor: currentActorName()}) });
+    const res = await fetch('/api/whatsapp?action=templates&name='+encodeURIComponent(name), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status, actor: currentActorName()}) });
     const data = await res.json();
     if(!res.ok || !data.success){ toast(data.error||'Failed'); return; }
     const tpl = WA_ADMIN_STATE.templates.find(t=>t.name===name); if(tpl) tpl.status = status;
@@ -3494,7 +3494,7 @@ async function executeManualSend(delayMs){
 
   const doSend = async () => {
     try{
-      const res = await fetch('/api/whatsapp-manual-send', {
+      const res = await fetch('/api/whatsapp?action=manual-send', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ round_id: round.id, recipients, language, template_name: templateName, sent_by: currentActorName() })
       });
