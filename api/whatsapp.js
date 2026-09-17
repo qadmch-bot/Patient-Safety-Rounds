@@ -17,16 +17,14 @@ import { normalizeToE164 } from "../lib/phone.js";
 /*
   Patient Safety Rounds - WhatsApp API
 
-  الإرسال اليدوي غير مقيد بموعد الجولة.
-  تستطيع إدارة الجودة إرسال:
-  1) إشعار الجولة في أي وقت
-  2) تذكير بقرب الجولة في أي وقت
-  3) تذكير برفع الخطة التصحيحية والأدلة
-  4) رسالة مخصصة
-
-  ملاحظة:
-  WhatsApp/Meta يشترط قالباً معتمداً للرسائل
-  Business-Initiated خارج نافذة المحادثة 24 ساعة.
+  الوظائف:
+  1) إرسال إشعار الجولة
+  2) إرسال تذكير الجولة
+  3) إرسال تذكير الخطة التصحيحية
+  4) إرسال رسالة مخصصة
+  5) استقبال ردود WhatsApp:
+     - تأكيد الحضور
+     - تعذر الحضور
 */
 
 const ATTENDANCE_TEMPLATE_NAME =
@@ -48,6 +46,21 @@ export default async function handler(req, res) {
 
   try {
 
+    /*
+      ================================================
+      INCOMING WHATSAPP MESSAGE / QUICK REPLY
+      ================================================
+    */
+
+    if (
+      req.method === "POST" &&
+      !action &&
+      req.body?.From
+    ) {
+      return await handleIncomingWhatsApp(req, res);
+    }
+
+
     if (action === "templates") {
       return await handleTemplates(req, res);
     }
@@ -59,6 +72,21 @@ export default async function handler(req, res) {
     if (action === "send") {
       return await handleDirectSend(req, res);
     }
+
+    /*
+      GET بدون action:
+      يفيدنا لاختبار أن endpoint يعمل
+    */
+
+    if (req.method === "GET" && !action) {
+
+      return res.status(200).json({
+        success: true,
+        message: "WhatsApp endpoint is ready",
+        incoming_webhook: true
+      });
+    }
+
 
     return res.status(400).json({
       success: false,
@@ -79,6 +107,304 @@ export default async function handler(req, res) {
         "Internal server error"
     });
   }
+}
+
+
+/* =========================================================
+   INCOMING WHATSAPP
+   استقبال تأكيد / تعذر الحضور
+   ========================================================= */
+
+async function handleIncomingWhatsApp(req, res) {
+
+  const body = req.body || {};
+
+  const from =
+    String(body.From || "").trim();
+
+  const messageBody =
+    String(body.Body || "").trim();
+
+  const buttonPayload =
+    String(body.ButtonPayload || "").trim();
+
+  const buttonText =
+    String(body.ButtonText || "").trim();
+
+
+  /*
+    إزالة whatsapp:+ من الرقم
+  */
+
+  const phone =
+    from
+      .replace(/^whatsapp:/i, "")
+      .replace(/^\+/, "")
+      .trim();
+
+
+  /*
+    تحديد نوع الرد
+  */
+
+  let attendanceStatus = null;
+
+
+  if (
+    buttonPayload === "attendance_confirmed" ||
+    messageBody === "تأكيد الحضور" ||
+    buttonText === "تأكيد الحضور"
+  ) {
+
+    attendanceStatus = "Confirmed";
+  }
+
+
+  if (
+    buttonPayload === "attendance_declined" ||
+    messageBody === "تعذر الحضور" ||
+    buttonText === "تعذر الحضور"
+  ) {
+
+    attendanceStatus = "Declined";
+  }
+
+
+  console.log("WhatsApp inbound message:", {
+
+    from,
+    phone,
+    messageBody,
+    buttonPayload,
+    buttonText,
+    attendanceStatus
+
+  });
+
+
+  /*
+    إذا كانت رسالة عادية وليست رد حضور
+  */
+
+  if (!attendanceStatus) {
+
+    return res.status(200).json({
+      success: true,
+      received: true,
+      attendance: false,
+      phone,
+      message: messageBody
+    });
+  }
+
+
+  /*
+    البحث عن العضو حسب رقم الجوال
+  */
+
+  let members = [];
+
+  try {
+
+    members = await sbGet(
+      "round_members",
+      `?mobile=eq.${encodeURIComponent(phone)}`
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Unable to find round member:",
+      error
+    );
+  }
+
+
+  /*
+    إذا لم نجد الرقم بدون +
+    نجرب بصيغة +966...
+  */
+
+  if (!members.length) {
+
+    try {
+
+      members = await sbGet(
+        "round_members",
+        `?mobile=eq.${encodeURIComponent(
+          "+" + phone
+        )}`
+      );
+
+    } catch (error) {
+
+      console.error(
+        "Unable to find round member with + prefix:",
+        error
+      );
+    }
+  }
+
+
+  const member =
+    members.length
+      ? members[0]
+      : null;
+
+
+  /*
+    البحث عن أحدث رسالة جولة مرسلة لهذا الرقم.
+    هذا يسمح لنا بمعرفة الجولة المرتبطة بالرد.
+  */
+
+  let sentMessages = [];
+
+  try {
+
+    sentMessages = await sbGet(
+      "whatsapp_manual_messages",
+      `?recipient_mobile=ilike.*${encodeURIComponent(phone)}*&status=eq.sent&order=created_at.desc&limit=1`
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Unable to find latest WhatsApp message:",
+      error
+    );
+  }
+
+
+  const latestMessage =
+    sentMessages.length
+      ? sentMessages[0]
+      : null;
+
+
+  const roundId =
+    latestMessage?.round_id ||
+    null;
+
+
+  /*
+    تسجيل الحدث في Audit Trail.
+    لا نفترض وجود أعمدة attendance داخل
+    round_participants حتى لا نخاطر بكسر النظام.
+  */
+
+  try {
+
+    await logAudit({
+
+      action:
+        attendanceStatus === "Confirmed"
+          ? "WhatsApp Attendance Confirmed"
+          : "WhatsApp Attendance Declined",
+
+      entity_type:
+        "round_attendance",
+
+      entity_id:
+        roundId ||
+        phone,
+
+      actor:
+        member?.full_name ||
+        phone,
+
+      new_value: {
+
+        attendance_status:
+          attendanceStatus,
+
+        round_id:
+          roundId,
+
+        member_id:
+          member?.id ||
+          null,
+
+        member_name:
+          member?.full_name ||
+          null,
+
+        mobile:
+          phone,
+
+        message_body:
+          messageBody,
+
+        button_payload:
+          buttonPayload,
+
+        button_text:
+          buttonText,
+
+        received_at:
+          new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+
+    /*
+      لا نفشل Webhook إذا تعذر Audit Trail.
+      Twilio يجب أن يحصل على HTTP 200.
+    */
+
+    console.error(
+      "Attendance audit log error:",
+      error
+    );
+  }
+
+
+  /*
+    النتيجة
+  */
+
+  console.log(
+    "Attendance response processed:",
+    {
+      status: attendanceStatus,
+      roundId,
+      phone,
+      member:
+        member?.full_name ||
+        null
+    }
+  );
+
+
+  return res.status(200).json({
+
+    success: true,
+
+    received: true,
+
+    attendance: true,
+
+    attendance_status:
+      attendanceStatus,
+
+    round_id:
+      roundId,
+
+    member: member
+      ? {
+          id:
+            member.id,
+
+          name:
+            member.full_name,
+
+          mobile:
+            member.mobile
+        }
+      : null,
+
+    phone
+  });
 }
 
 
@@ -110,7 +436,8 @@ async function handleTemplates(req, res) {
 
       return res.status(400).json({
         success: false,
-        error: "name query param is required."
+        error:
+          "name query param is required."
       });
     }
 
@@ -138,7 +465,9 @@ async function handleTemplates(req, res) {
       "whatsapp_templates",
       `?name=eq.${encodeURIComponent(name)}`,
       {
-        status: body.status,
+        status:
+          body.status,
+
         updated_at:
           new Date().toISOString()
       }
@@ -146,6 +475,7 @@ async function handleTemplates(req, res) {
 
 
     await logAudit({
+
       action:
         "WhatsApp Template Status Changed",
 
@@ -159,21 +489,24 @@ async function handleTemplates(req, res) {
         body.actor,
 
       new_value: {
-        status: body.status
+        status:
+          body.status
       }
     });
 
 
     return res.status(200).json({
       success: true,
-      template: updated[0]
+      template:
+        updated[0]
     });
   }
 
 
   return res.status(405).json({
     success: false,
-    error: "Method not allowed"
+    error:
+      "Method not allowed"
   });
 }
 
@@ -212,7 +545,8 @@ function formatRoundDate(round) {
 
   try {
 
-    const date = new Date(raw);
+    const date =
+      new Date(raw);
 
     if (
       Number.isNaN(
@@ -397,7 +731,8 @@ async function handleManualSend(req, res) {
 
     return res.status(200).json({
       success: true,
-      messages: rows
+      messages:
+        rows
     });
   }
 
@@ -631,15 +966,6 @@ async function handleManualSend(req, res) {
           .TWILIO_PLAN_TEMPLATE_SID;
 
 
-      /*
-        عندما ننشئ قالب الخطة التصحيحية
-        في Twilio سنضع Content SID
-        في Vercel باسم:
-
-        TWILIO_PLAN_TEMPLATE_SID
-      */
-
-
       if (planSid) {
 
 
@@ -663,13 +989,6 @@ async function handleManualSend(req, res) {
 
 
       } else {
-
-
-        /*
-          مؤقتاً:
-          يمكن إرسال الرسالة الحرة
-          إذا كانت نافذة 24 ساعة مفتوحة.
-        */
 
 
         sendResult =
