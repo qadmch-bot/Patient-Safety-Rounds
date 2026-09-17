@@ -4607,6 +4607,30 @@ async function viewRoundFollowupAsync(department){
   document.getElementById('rf-results').innerHTML = `<div class="card"><div class="card-head"><h3>${deptName(department)}</h3><span class="hint">${findings.length}</span></div><div class="card-pad">${previousFollowUpTableHtml(findings)}</div></div>`;
 }
 
+/* ---------------- Attendance status badge ---------------- */
+function attendanceBadgeHtml(status, respondedAt){
+  const value = String(status || 'Pending');
+  let cls = 'b-amber';
+  let label = STATE.lang==='ar' ? '⏳ بانتظار الرد' : '⏳ Pending';
+
+  if(value === 'Confirmed'){
+    cls = 'b-green';
+    label = STATE.lang==='ar' ? '✓ تم تأكيد الحضور' : '✓ Confirmed';
+  } else if(value === 'Declined'){
+    cls = 'b-red';
+    label = STATE.lang==='ar' ? '✕ تعذر الحضور' : '✕ Declined';
+  }
+
+  let title = '';
+  if(respondedAt){
+    try{
+      title = new Date(respondedAt).toLocaleString(STATE.lang==='ar'?'ar-SA':'en-US', { timeZone:'Asia/Riyadh' });
+    }catch(_){ title = String(respondedAt); }
+  }
+
+  return `<span class="badge ${cls}"${title?` title="${esc(title)}"`:''}>${label}</span>`;
+}
+
 /* ---------------- Send Round Reminders via wa.me (no Twilio required) ---------------- */
 async function viewRoundRemindersAsync(roundId){
   const content = document.getElementById('content');
@@ -4629,7 +4653,15 @@ async function viewRoundRemindersAsync(roundId){
     const detailData = await detailRes.json();
     if(!detailData.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(detailData.error||'Round not found')}</b></div>`; return; }
     const round = detailData.round;
-    const participants = (detailData.participants||[]).map(p=>p.round_members).filter(Boolean);
+    const participants = (detailData.participants||[]).map(p=>{
+      const member = p.round_members;
+      if(!member) return null;
+      return {
+        ...member,
+        attendance_status: p.attendance_status || 'Pending',
+        attendance_responded_at: p.attendance_responded_at || null
+      };
+    }).filter(Boolean);
     const link = window.location.origin + '/round/' + round.secure_token;
 
     content.innerHTML = `
@@ -4641,6 +4673,7 @@ async function viewRoundRemindersAsync(roundId){
       <div class="card-head"><h3>${STATE.lang==='ar'?'أعضاء الجولة':'Round Members'}</h3><span class="hint">${participants.length}</span></div>
       <div class="table-wrap"><table><thead><tr>
         <th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th>
+        <th>${STATE.lang==='ar'?'حالة الحضور':'Attendance'}</th>
         <th>${STATE.lang==='ar'?'تذكير 24 ساعة':'24-Hour Reminder'}</th><th>${STATE.lang==='ar'?'تذكير ساعة واحدة':'1-Hour Reminder'}</th>
       </tr></thead><tbody>
       ${participants.length? participants.map(m=>{
@@ -4649,10 +4682,11 @@ async function viewRoundRemindersAsync(roundId){
         return `<tr>
           <td>${esc(m.full_name)}${m.job_title?' — '+esc(m.job_title):''}</td>
           <td>${esc(m.mobile||'—')}</td>
+          <td>${attendanceBadgeHtml(m.attendance_status, m.attendance_responded_at)}</td>
           <td>${waMeButtonHtml(m.mobile, msg24, STATE.lang==='ar'?'إرسال 24س':'Send 24h')}</td>
           <td>${waMeButtonHtml(m.mobile, msg1, STATE.lang==='ar'?'إرسال 1س':'Send 1h')}</td>
         </tr>`;
-      }).join('') : `<tr><td colspan="4"><div class="empty">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة':'No members linked to this round'}</div></td></tr>`}
+      }).join('') : `<tr><td colspan="5"><div class="empty">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة':'No members linked to this round'}</div></td></tr>`}
       </tbody></table></div>
     </div>`;
   } catch(error){
