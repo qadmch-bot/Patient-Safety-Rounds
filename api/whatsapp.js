@@ -7,26 +7,49 @@ import {
   handleConfigError
 } from "../lib/supabase.js";
 
-import { sendTwilioMessageRaw } from "../lib/twilio-send.js";
-import { manualRoundMessage } from "../lib/messages.js";
+import {
+  sendTwilioMessageRaw,
+  sendTwilioTemplate
+} from "../lib/twilio-send.js";
+
 import { normalizeToE164 } from "../lib/phone.js";
 
-/*
-  WhatsApp API - Patient Safety Rounds
 
-  ?action=manual-send
-    GET  -> WhatsApp message history
-    POST -> Send WhatsApp message for a round
+/* =========================================================
+   WHATSAPP API - PATIENT SAFETY ROUNDS
+   =========================================================
 
-  ?action=templates
-    GET   -> List WhatsApp templates
-    PATCH -> Update template approval status
+   ?action=manual-send
+     GET  -> WhatsApp message history
+     POST -> Send approved WhatsApp attendance template
 
-  ?action=send
-    POST -> Direct WhatsApp test/manual message
+   ?action=templates
+     GET   -> List WhatsApp templates
+     PATCH -> Update template approval status
+
+   ?action=send
+     POST -> Direct WhatsApp test/manual message
+             داخل نافذة الـ 24 ساعة فقط
 */
 
+
+/* =========================================================
+   APPROVED ATTENDANCE TEMPLATE
+   ========================================================= */
+
+const ATTENDANCE_TEMPLATE_NAME =
+  "patient_safety_round_attendance";
+
+const ATTENDANCE_CONTENT_SID =
+  "HX447d377620816baa3eb67f840520f59f";
+
+
+/* =========================================================
+   MAIN HANDLER
+   ========================================================= */
+
 export default async function handler(req, res) {
+
   setCors(res);
 
   if (req.method === "OPTIONS") {
@@ -36,6 +59,7 @@ export default async function handler(req, res) {
   const action = req.query.action;
 
   try {
+
     if (action === "templates") {
       return await handleTemplates(req, res);
     }
@@ -50,20 +74,25 @@ export default async function handler(req, res) {
 
     return res.status(400).json({
       success: false,
-      error: "action must be 'manual-send', 'templates', or 'send'."
+      error:
+        "action must be 'manual-send', 'templates', or 'send'."
     });
 
   } catch (error) {
+
     if (handleConfigError(res, error)) return;
 
     console.error("WhatsApp API error:", error);
 
     return res.status(500).json({
       success: false,
-      error: error.message || "Internal server error"
+      error:
+        error.message ||
+        "Internal server error"
     });
   }
 }
+
 
 /* =========================================================
    TEMPLATES
@@ -72,6 +101,7 @@ export default async function handler(req, res) {
 async function handleTemplates(req, res) {
 
   if (req.method === "GET") {
+
     const templates = await sbGet(
       "whatsapp_templates",
       "?order=name.asc"
@@ -83,6 +113,7 @@ async function handleTemplates(req, res) {
     });
   }
 
+
   if (req.method === "PATCH") {
 
     const name = req.query.name;
@@ -90,18 +121,21 @@ async function handleTemplates(req, res) {
     if (!name) {
       return res.status(400).json({
         success: false,
-        error: "name query param is required."
+        error:
+          "name query param is required."
       });
     }
 
     const body = req.body || {};
 
     if (
-      !["Approved", "Pending", "Rejected"].includes(body.status)
+      !["Approved", "Pending", "Rejected"]
+        .includes(body.status)
     ) {
       return res.status(400).json({
         success: false,
-        error: "status must be Approved, Pending or Rejected."
+        error:
+          "status must be Approved, Pending or Rejected."
       });
     }
 
@@ -110,13 +144,16 @@ async function handleTemplates(req, res) {
       `?name=eq.${encodeURIComponent(name)}`,
       {
         status: body.status,
-        updated_at: new Date().toISOString()
+        updated_at:
+          new Date().toISOString()
       }
     );
 
     await logAudit({
-      action: "WhatsApp Template Status Changed",
-      entity_type: "whatsapp_template",
+      action:
+        "WhatsApp Template Status Changed",
+      entity_type:
+        "whatsapp_template",
       entity_id: name,
       actor: body.actor,
       new_value: {
@@ -130,30 +167,139 @@ async function handleTemplates(req, res) {
     });
   }
 
+
   return res.status(405).json({
     success: false,
     error: "Method not allowed"
   });
 }
 
+
+/* =========================================================
+   DATE / TIME FORMATTERS
+   ========================================================= */
+
+function formatRoundDate(round) {
+
+  const rawDate =
+    round.round_date ||
+    round.date ||
+    round.scheduled_date ||
+    round.scheduled_at ||
+    round.start_at ||
+    null;
+
+  if (!rawDate) {
+    return "حسب الموعد المحدد";
+  }
+
+  try {
+
+    const date = new Date(rawDate);
+
+    if (Number.isNaN(date.getTime())) {
+      return String(rawDate);
+    }
+
+    return new Intl.DateTimeFormat(
+      "ar-SA",
+      {
+        timeZone: "Asia/Riyadh",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }
+    ).format(date);
+
+  } catch {
+
+    return String(rawDate);
+  }
+}
+
+
+function formatRoundTime(round) {
+
+  /*
+    إذا كانت قاعدة البيانات تحتوي وقتاً منفصلاً
+    مثل round_time نستخدمه مباشرة.
+  */
+
+  const directTime =
+    round.round_time ||
+    round.time ||
+    round.scheduled_time ||
+    null;
+
+  if (directTime) {
+    return String(directTime);
+  }
+
+
+  const rawDate =
+    round.scheduled_at ||
+    round.start_at ||
+    round.round_date ||
+    round.date ||
+    null;
+
+  if (!rawDate) {
+    return "حسب الموعد المحدد";
+  }
+
+  try {
+
+    const date = new Date(rawDate);
+
+    if (Number.isNaN(date.getTime())) {
+      return String(rawDate);
+    }
+
+    return new Intl.DateTimeFormat(
+      "ar-SA",
+      {
+        timeZone: "Asia/Riyadh",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true
+      }
+    ).format(date);
+
+  } catch {
+
+    return String(rawDate);
+  }
+}
+
+
 /* =========================================================
    MANUAL SEND
+   APPROVED WHATSAPP ATTENDANCE TEMPLATE
    ========================================================= */
 
 async function handleManualSend(req, res) {
 
+  /* -------------------------
+     GET MESSAGE HISTORY
+     ------------------------- */
+
   if (req.method === "GET") {
 
-    let query = "?order=created_at.desc&limit=200";
+    let query =
+      "?order=created_at.desc&limit=200";
 
     if (req.query.round_id) {
       query +=
-        `&round_id=eq.${encodeURIComponent(req.query.round_id)}`;
+        `&round_id=eq.${encodeURIComponent(
+          req.query.round_id
+        )}`;
     }
 
     if (req.query.status) {
       query +=
-        `&status=eq.${encodeURIComponent(req.query.status)}`;
+        `&status=eq.${encodeURIComponent(
+          req.query.status
+        )}`;
     }
 
     if (req.query.recipient) {
@@ -165,7 +311,9 @@ async function handleManualSend(req, res) {
 
     if (req.query.date) {
       query +=
-        `&created_at=gte.${encodeURIComponent(req.query.date)}`;
+        `&created_at=gte.${encodeURIComponent(
+          req.query.date
+        )}`;
     }
 
     const rows = await sbGet(
@@ -179,6 +327,11 @@ async function handleManualSend(req, res) {
     });
   }
 
+
+  /* -------------------------
+     POST ONLY
+     ------------------------- */
+
   if (req.method !== "POST") {
     return res.status(405).json({
       success: false,
@@ -186,7 +339,13 @@ async function handleManualSend(req, res) {
     });
   }
 
+
   const body = req.body || {};
+
+
+  /* -------------------------
+     VALIDATE ROUND
+     ------------------------- */
 
   if (!body.round_id) {
     return res.status(400).json({
@@ -195,53 +354,32 @@ async function handleManualSend(req, res) {
     });
   }
 
+
+  /* -------------------------
+     VALIDATE RECIPIENTS
+     ------------------------- */
+
   if (
     !Array.isArray(body.recipients) ||
     !body.recipients.length
   ) {
     return res.status(400).json({
       success: false,
-      error: "At least one recipient is required."
-    });
-  }
-
-  if (!body.template_name) {
-    return res.status(400).json({
-      success: false,
-      error: "template_name is required."
-    });
-  }
-
-  /* Check template */
-
-  const templates = await sbGet(
-    "whatsapp_templates",
-    `?name=eq.${encodeURIComponent(body.template_name)}`
-  );
-
-  const template = templates[0];
-
-  if (!template) {
-    return res.status(400).json({
-      success: false,
-      error: "Unknown template."
-    });
-  }
-
-  if (template.status !== "Approved") {
-    return res.status(400).json({
-      success: false,
       error:
-        `Cannot send — template "${body.template_name}" ` +
-        `is not Approved (current status: ${template.status}).`
+        "At least one recipient is required."
     });
   }
 
-  /* Get round */
+
+  /* =====================================================
+     GET ROUND
+     ===================================================== */
 
   const rounds = await sbGet(
     "rounds",
-    `?id=eq.${encodeURIComponent(body.round_id)}`
+    `?id=eq.${encodeURIComponent(
+      body.round_id
+    )}`
   );
 
   if (!rounds.length) {
@@ -253,112 +391,204 @@ async function handleManualSend(req, res) {
 
   const round = rounds[0];
 
-  /* Build secure round link */
 
-  const proto =
-    req.headers["x-forwarded-proto"] || "https";
+  /* =====================================================
+     TEMPLATE VARIABLES
 
-  const host =
-    req.headers.host ||
-    "patient-safety-rounds.vercel.app";
+     {{1}} = Round Date
+     {{2}} = Round Time
+     ===================================================== */
 
-  const link =
-    `${proto}://${host}/round/${round.secure_token}`;
+  const roundDate =
+    formatRoundDate(round);
 
-  const lang =
-    body.language === "en" ? "en" : "ar";
+  const roundTime =
+    formatRoundTime(round);
 
-  const message = manualRoundMessage({
-    lang,
-    round,
-    link
-  });
+
+  const contentVariables = {
+    "1": roundDate,
+    "2": roundTime
+  };
+
+
+  /* =====================================================
+     SEND TO RECIPIENTS
+     ===================================================== */
 
   const results = [];
 
-  /* Send to recipients */
 
   for (const recipient of body.recipients) {
 
     const mobile =
-      normalizeToE164(recipient.mobile);
+      normalizeToE164(
+        recipient.mobile
+      );
+
 
     const row = {
-      round_id: body.round_id,
+
+      round_id:
+        body.round_id,
+
       recipient_name:
         recipient.name || null,
+
       recipient_mobile:
         recipient.mobile || "",
-      language: lang,
+
+      language:
+        "ar",
+
       template_name:
-        body.template_name,
+        ATTENDANCE_TEMPLATE_NAME,
+
       sent_by:
-        body.sent_by || "Quality Admin",
-      status: "pending"
+        body.sent_by ||
+        "Quality Admin",
+
+      status:
+        "pending"
     };
+
+
+    /* -------------------------
+       INVALID NUMBER
+       ------------------------- */
 
     if (!mobile) {
 
-      row.status = "failed";
+      row.status =
+        "failed";
+
       row.failure_reason =
         "Invalid mobile number format.";
 
-      const inserted = await sbInsert(
-        "whatsapp_manual_messages",
-        [row]
-      );
+      const inserted =
+        await sbInsert(
+          "whatsapp_manual_messages",
+          [row]
+        );
 
-      results.push(inserted[0]);
+      results.push(
+        inserted[0]
+      );
 
       continue;
     }
 
-    row.recipient_mobile = mobile;
+
+    row.recipient_mobile =
+      mobile;
+
+
+    /* =====================================================
+       SEND APPROVED TWILIO TEMPLATE
+
+       IMPORTANT:
+       NO Body
+       NO raw WhatsApp message
+
+       ContentSid + ContentVariables
+       ===================================================== */
 
     const sendResult =
-      await sendTwilioMessageRaw({
-        to: mobile,
-        message
+      await sendTwilioTemplate({
+
+        to:
+          mobile,
+
+        contentSid:
+          ATTENDANCE_CONTENT_SID,
+
+        variables:
+          contentVariables
       });
+
+
+    /* -------------------------
+       SUCCESS
+       ------------------------- */
 
     if (sendResult.success) {
 
-      row.status = "sent";
+      row.status =
+        "sent";
+
       row.message_sid =
         sendResult.sid;
 
       row.sent_at =
         new Date().toISOString();
 
-    } else {
-
-      row.status = "failed";
-      row.failure_reason =
-        sendResult.error;
     }
 
-    const inserted = await sbInsert(
-      "whatsapp_manual_messages",
-      [row]
-    );
+    /* -------------------------
+       FAILED
+       ------------------------- */
 
-    results.push(inserted[0]);
+    else {
+
+      row.status =
+        "failed";
+
+      row.failure_reason =
+        sendResult.code
+          ? `${sendResult.error} (Twilio ${sendResult.code})`
+          : sendResult.error;
+    }
+
+
+    const inserted =
+      await sbInsert(
+        "whatsapp_manual_messages",
+        [row]
+      );
+
+
+    results.push(
+      inserted[0]
+    );
   }
+
+
+  /* =====================================================
+     FINAL RESULT
+     ===================================================== */
 
   const anySuccess =
     results.some(
-      (result) => result.status === "sent"
+      result =>
+        result.status === "sent"
     );
 
+
   return res.status(200).json({
-    success: anySuccess,
-    results,
-    message_preview: message
+
+    success:
+      anySuccess,
+
+    template:
+      ATTENDANCE_TEMPLATE_NAME,
+
+    content_sid:
+      ATTENDANCE_CONTENT_SID,
+
+    variables:
+      contentVariables,
+
+    results
   });
 }
 
+
 /* =========================================================
    DIRECT TEST SEND
+   RAW BODY MESSAGE
+
+   يعمل فقط داخل نافذة WhatsApp 24 ساعة.
+   أبقيناه حتى لا تتعطل خاصية الاختبار الحالية.
    ========================================================= */
 
 async function handleDirectSend(req, res) {
@@ -370,21 +600,30 @@ async function handleDirectSend(req, res) {
     });
   }
 
-  const body = req.body || {};
+
+  const body =
+    req.body || {};
+
 
   const to =
-    normalizeToE164(body.to);
+    normalizeToE164(
+      body.to
+    );
+
 
   if (!to) {
     return res.status(400).json({
       success: false,
-      error: "Valid recipient number is required."
+      error:
+        "Valid recipient number is required."
     });
   }
+
 
   const message =
     body.message ||
     "اختبار نظام جولات سلامة المرضى - تم الاتصال بخدمة WhatsApp بنجاح.";
+
 
   const result =
     await sendTwilioMessageRaw({
@@ -392,22 +631,38 @@ async function handleDirectSend(req, res) {
       message
     });
 
+
   if (!result.success) {
+
     return res.status(500).json({
-      success: false,
+
+      success:
+        false,
+
       error:
         result.error ||
-        "Twilio request failed"
+        "Twilio request failed",
+
+      code:
+        result.code || null
     });
   }
 
+
   return res.status(200).json({
-    success: true,
-    sid: result.sid,
+
+    success:
+      true,
+
+    sid:
+      result.sid,
+
     status:
       result.status || "sent",
+
     to
   });
 }
+
 
 // redeploy
