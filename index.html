@@ -305,7 +305,7 @@ hr.sep{border:none; border-top:1px solid var(--line-soft); margin:16px 0;}
 /* ---------------------------- SYSTEM CLOCK ---------------------------- */
 // Fixed "today" so the seeded demo narrative (overdue items, upcoming round
 // countdowns, missed rounds) stays consistent. Matches the current session date.
-const TODAY = new Date(2026,8,14); // 14 Sep 2026
+const TODAY = new Date(); // Live current date
 function todayStr(){ return fmtISO(TODAY); }
 
 /* ---------------------------- I18N ---------------------------- */
@@ -1618,7 +1618,7 @@ function viewRoundsList(){
   <div class="card">
     <div class="table-wrap"><table><thead><tr>
       <th>${STATE.lang==='ar'?'رقم الجولة':'Round ID'}</th><th>${t('departments')}</th><th>${STATE.lang==='ar'?'التاريخ':'Date'}</th>
-      <th>${STATE.lang==='ar'?'رئيس الفريق':'Lead Reviewer'}</th><th>${STATE.lang==='ar'?'الالتزام':'Compliance'}</th><th>${STATE.lang==='ar'?'الملاحظات':'Findings'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th>
+      <th>${STATE.lang==='ar'?'الوقت':'Time'}</th><th>${STATE.lang==='ar'?'رئيس الفريق':'Lead Reviewer'}</th><th>${STATE.lang==='ar'?'الالتزام':'Compliance'}</th><th>${STATE.lang==='ar'?'الملاحظات':'Findings'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'الإجراءات':'Actions'}</th>
     </tr></thead><tbody>
     ${rows.map(r=>{
       const obs = OBSERVATIONS.filter(o=>o.roundId===r.id);
@@ -1627,14 +1627,79 @@ function viewRoundsList(){
         <td class="tbl-link" onclick="go('round-detail',{id:'${r.id}'})">${r.id}</td>
         <td>${r.depts.map(deptName).join(' + ')}</td>
         <td class="nowrap">${fmtDate(r.plannedDate)}</td>
+        <td class="nowrap">${esc(r.plannedTime||'—')}</td>
         <td>${esc(r.lead)}</td>
         <td>${comp}</td>
         <td>${obs.length}</td>
         <td>${roundStatusBadge(r)}</td>
+        <td class="nowrap"><button class="small-btn-icon" onclick="event.stopPropagation();openEditRound('${r.id}')" title="Edit">✎</button> <button class="small-btn-icon" onclick="event.stopPropagation();deleteRoundLive('${r.id}')" title="Delete">🗑️</button></td>
       </tr>`;
     }).join('')}
     </tbody></table></div>
   </div>`;
+}
+
+
+/* ================= LIVE ROUND MANAGEMENT ================= */
+function apiRoundToLocal(r){
+  return {id:r.id,depts:r.departments||[],plannedDate:r.planned_date||'',plannedTime:r.planned_time||'',
+    team:r.team||'QPS Rounds Team',lead:r.lead_reviewer||'To be assigned',
+    rep:r.department_representative||'To be assigned',notes:r.notes||'',status:r.status||'Scheduled',
+    completedDate:r.completed_date||null,secureToken:r.secure_token||null};
+}
+async function loadLiveRounds(){
+  try{
+    const res=await fetch('/api/rounds',{cache:'no-store'});
+    const data=await res.json();
+    if(!res.ok||!data.success) throw new Error(data.error||'Could not load rounds');
+    const live=(data.rounds||[]).map(apiRoundToLocal);
+    const ids=new Set(live.map(r=>String(r.id)));
+    ROUNDS=[...live,...ROUNDS.filter(r=>!ids.has(String(r.id)))];
+    WA_ADMIN_STATE.rounds=data.rounds||[];
+    if(WA_ADMIN_STATE.selectedRoundId&&!WA_ADMIN_STATE.rounds.some(r=>String(r.id)===String(WA_ADMIN_STATE.selectedRoundId))) WA_ADMIN_STATE.selectedRoundId='';
+    if(!WA_ADMIN_STATE.selectedRoundId&&WA_ADMIN_STATE.rounds.length) WA_ADMIN_STATE.selectedRoundId=WA_ADMIN_STATE.rounds[0].id;
+    renderShell(); render();
+  }catch(e){console.error(e);toast((STATE.lang==='ar'?'تعذر تحميل الجولات: ':'Could not load rounds: ')+e.message);}
+}
+function openEditRound(id){
+  const r=roundById(id); if(!r)return;
+  const selected=new Set(r.depts||[]);
+  openModal(STATE.lang==='ar'?'تعديل الجولة':'Edit Round',`
+    <div class="field"><label>${STATE.lang==='ar'?'رقم الجولة':'Round ID'}</label><input value="${esc(r.id)}" disabled></div>
+    <div class="field"><label>${STATE.lang==='ar'?'الأقسام':'Departments'} *</label><select id="er-depts" multiple size="7">${DEPARTMENTS.map(d=>`<option value="${d.id}" ${selected.has(d.id)?'selected':''}>${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select></div>
+    <div class="field-row"><div class="field"><label>${STATE.lang==='ar'?'التاريخ':'Date'} *</label><input type="date" id="er-date" value="${esc(r.plannedDate||'')}"></div>
+    <div class="field"><label>${STATE.lang==='ar'?'الوقت':'Time'} *</label><input type="time" id="er-time" value="${esc(r.plannedTime||'10:00')}"></div></div>
+    <div class="field"><label>${STATE.lang==='ar'?'فريق الجولة':'Round Team'}</label><input id="er-team" value="${esc(r.team||'')}"></div>
+    <div class="field-row"><div class="field"><label>${STATE.lang==='ar'?'رئيس الفريق':'Lead Reviewer'}</label><input id="er-lead" value="${esc(r.lead||'')}"></div>
+    <div class="field"><label>${STATE.lang==='ar'?'ممثل القسم':'Department Representative'}</label><input id="er-rep" value="${esc(r.rep||'')}"></div></div>
+    <div class="field"><label>${STATE.lang==='ar'?'ملاحظات':'Notes'}</label><textarea id="er-notes">${esc(r.notes||'')}</textarea></div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button class="btn btn-primary" onclick="saveEditedRound('${r.id}')">${STATE.lang==='ar'?'حفظ التعديل':'Save Changes'}</button>`);
+}
+async function saveEditedRound(id){
+  const departments=Array.from(document.getElementById('er-depts').selectedOptions).map(o=>o.value);
+  const planned_date=document.getElementById('er-date').value, planned_time=document.getElementById('er-time').value;
+  if(!departments.length||!planned_date||!planned_time){toast(STATE.lang==='ar'?'القسم والتاريخ والوقت مطلوبة':'Department, date and time required');return;}
+  const payload={departments,planned_date,planned_time,team:document.getElementById('er-team').value||'QPS Rounds Team',
+    lead_reviewer:document.getElementById('er-lead').value||'To be assigned',
+    department_representative:document.getElementById('er-rep').value||'To be assigned',
+    notes:document.getElementById('er-notes').value||'',actor:currentActorName()};
+  try{
+    const res=await fetch('/api/rounds?id='+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data=await res.json(); if(!res.ok||!data.success)throw new Error(data.error||'Update failed');
+    closeModal(); await loadLiveRounds();
+    try{await fetch('/api/create-reminder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({round_id:id,replace_existing:true})});}catch(e){}
+    toast(STATE.lang==='ar'?'تم تعديل الجولة':'Round updated'); go('rounds');
+  }catch(e){toast((STATE.lang==='ar'?'فشل تعديل الجولة: ':'Update failed: ')+e.message);}
+}
+async function deleteRoundLive(id){
+  if(!confirm(STATE.lang==='ar'?`هل تريدين حذف الجولة ${id}؟`:`Delete round ${id}?`))return;
+  try{
+    const res=await fetch('/api/rounds?id='+encodeURIComponent(id),{method:'DELETE'});
+    const data=await res.json(); if(!res.ok||!data.success)throw new Error(data.error||'Delete failed');
+    ROUNDS=ROUNDS.filter(r=>String(r.id)!==String(id)); WA_ADMIN_STATE.rounds=WA_ADMIN_STATE.rounds.filter(r=>String(r.id)!==String(id));
+    if(String(WA_ADMIN_STATE.selectedRoundId)===String(id))WA_ADMIN_STATE.selectedRoundId='';
+    toast(STATE.lang==='ar'?'تم حذف الجولة':'Round deleted'); go('rounds');
+  }catch(e){toast((STATE.lang==='ar'?'فشل حذف الجولة: ':'Delete failed: ')+e.message);}
 }
 
 /* ================= ROUND NEW (create) ================= */
@@ -3191,7 +3256,8 @@ function viewAdmin(){
 let WA_ADMIN_STATE = {
   loaded:false, rounds:[], templates:[], manualHistory:[], autoHistory:[],
   selectedRoundId:'', recipientType:'mobile', manualNumber:'', selectedMemberId:'', selectedMemberIds:[],
-  language:'ar', templateName:'patient_safety_round_24h_reminder',
+  language:'ar', templateName:'patient_safety_round_attendance',
+  messageType:'round_notice', customMessage:'',
 };
 async function renderWhatsAppAdminAsync(){
   const root = document.getElementById('wa-admin-root');
@@ -3203,7 +3269,7 @@ async function renderWhatsAppAdminAsync(){
       fetch('/api/whatsapp?action=manual-send').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/whatsapp-reminders-log').then(r=>r.json()).catch(()=>({success:false})),
     ]);
-    WA_ADMIN_STATE.rounds = roundsRes.success? roundsRes.rounds : [];
+    WA_ADMIN_STATE.rounds = roundsRes.success? (roundsRes.rounds||[]).sort((a,b)=>`${b.planned_date||''}T${b.planned_time||'00:00'}`.localeCompare(`${a.planned_date||''}T${a.planned_time||'00:00'}`)) : [];
     WA_ADMIN_STATE.templates = templatesRes.success? templatesRes.templates : [];
     WA_ADMIN_STATE.manualHistory = manualRes.success? manualRes.messages : [];
     WA_ADMIN_STATE.autoHistory = autoRes.success? autoRes.reminders : [];
@@ -3228,17 +3294,33 @@ function manualRecipients(){
 function manualMessagePreviewText(){
   const round = selectedRound();
   if(!round) return STATE.lang==='ar'?'اختاري جولة أولًا':'Select a round first';
-  const link = window.location.origin + '/round/' + (round.secure_token||'—');
-  return waRoundManualPreviewText(WA_ADMIN_STATE.language, round, link);
-}
-// Mirrors lib/messages.js manualRoundMessage() exactly, client-side, for the live preview.
-function waRoundManualPreviewText(lang, round, link){
+
   const dateStr = fmtDate(round.planned_date);
   const timeStr = round.planned_time || '';
-  if(lang==='ar'){
-    return `تذكير بجولة سلامة المرضى\n\nنذكركم بأن جولة سلامة المرضى ستعقد بتاريخ ${dateStr} في تمام الساعة ${timeStr}.\n\nيرجى الدخول عبر الرابط أدناه للمشاركة في الجولة وتسجيل الملاحظات حسب المحور المخصص لكم.\n\n${link}\n\nإدارة الجودة وسلامة المرضى\nمستشفى الولادة والأطفال – حفر الباطن`;
+  const roundLink = window.location.origin + '/round/' + (round.secure_token||'—');
+
+  if(WA_ADMIN_STATE.messageType==='plan_reminder'){
+    return STATE.lang==='ar'
+      ? `تذكير برفع الخطة التصحيحية والأدلة\n\nيرجى استكمال ورفع الخطة التصحيحية والأدلة المتعلقة بالجولة ${round.id}.\n\nإدارة الجودة وسلامة المرضى\nمستشفى الولادة والأطفال – حفر الباطن`
+      : `Corrective Action Plan Reminder\n\nPlease complete and upload the corrective action plan and supporting evidence for round ${round.id}.\n\nQuality & Patient Safety Management\nMaternity & Children Hospital – Hafr Al Batin`;
   }
-  return `Patient Safety Round Reminder\n\nThis is to remind you that a Patient Safety Round is scheduled on ${dateStr} at ${timeStr}.\n\nPlease use the link below to join the round and record observations for your assigned domain.\n\n${link}\n\nQuality & Patient Safety Management\nMaternity & Children Hospital – Hafr Al Batin`;
+
+  if(WA_ADMIN_STATE.messageType==='custom'){
+    return WA_ADMIN_STATE.customMessage || (STATE.lang==='ar'?'اكتبي نص الرسالة المخصصة':'Enter the custom message');
+  }
+
+  const title = WA_ADMIN_STATE.messageType==='round_1h'
+    ? (STATE.lang==='ar'?'تذكير بقرب موعد جولة سلامة المرضى':'Patient Safety Round – Upcoming Reminder')
+    : (STATE.lang==='ar'?'إشعار جولة سلامة المرضى':'Patient Safety Round Notification');
+
+  return STATE.lang==='ar'
+    ? `${title}\n\nالجولة: ${round.id}\nالتاريخ: ${dateStr}\nالوقت: ${timeStr}\n\n${roundLink}\n\nإدارة الجودة وسلامة المرضى\nمستشفى الولادة والأطفال – حفر الباطن`
+    : `${title}\n\nRound: ${round.id}\nDate: ${dateStr}\nTime: ${timeStr}\n\n${roundLink}\n\nQuality & Patient Safety Management\nMaternity & Children Hospital – Hafr Al Batin`;
+}
+
+function setManualMessageType(type){
+  WA_ADMIN_STATE.messageType = type;
+  go('admin',{tab:'whatsapp'});
 }
 
 function renderWhatsAppAdminSections(){
@@ -3320,6 +3402,24 @@ function renderWhatsAppAdminSections(){
         ${STATE.lang==='ar'?'رابط الجولة الآمن':'Direct round URL'}: <span style="font-family:monospace;">${window.location.origin}/round/${esc(round.secure_token||'—')}</span>
       </div>`:''}
 
+      <div class="field">
+        <label>${STATE.lang==='ar'?'نوع التذكير / الرسالة':'Reminder / Message Type'}</label>
+        <select id="ms-message-type" onchange="setManualMessageType(this.value)">
+          <option value="round_notice" ${WA_ADMIN_STATE.messageType==='round_notice'?'selected':''}>${STATE.lang==='ar'?'إشعار جولة — إرسال في أي وقت':'Round notification — send any time'}</option>
+          <option value="round_1h" ${WA_ADMIN_STATE.messageType==='round_1h'?'selected':''}>${STATE.lang==='ar'?'تذكير قرب موعد الجولة — إرسال في أي وقت':'Upcoming round reminder — send any time'}</option>
+          <option value="plan_reminder" ${WA_ADMIN_STATE.messageType==='plan_reminder'?'selected':''}>${STATE.lang==='ar'?'تذكير برفع الخطة التصحيحية والأدلة':'Corrective plan & evidence reminder'}</option>
+          <option value="custom" ${WA_ADMIN_STATE.messageType==='custom'?'selected':''}>${STATE.lang==='ar'?'رسالة مخصصة':'Custom message'}</option>
+        </select>
+      </div>
+
+      ${WA_ADMIN_STATE.messageType==='custom'?`
+        <div class="field">
+          <label>${STATE.lang==='ar'?'نص الرسالة المخصصة':'Custom Message'}</label>
+          <textarea id="ms-custom-message" rows="5" placeholder="${STATE.lang==='ar'?'اكتبي الرسالة هنا...':'Type the message here...'}"
+            oninput="WA_ADMIN_STATE.customMessage=this.value; const p=document.getElementById('ms-live-preview'); if(p)p.textContent=this.value;">${esc(WA_ADMIN_STATE.customMessage)}</textarea>
+          <div class="muted" style="font-size:10.6px;margin-top:6px;">${STATE.lang==='ar'?'الرسائل الحرة تعمل داخل نافذة محادثة WhatsApp المفتوحة. خارجها يلزم قالب معتمد من Meta.':'Free-form messages work inside an open WhatsApp conversation window. Outside it, Meta requires an approved template.'}</div>
+        </div>`:''}
+
       <div class="field"><label>${STATE.lang==='ar'?'نوع المستلم':'Recipient Type'}</label>
         <div class="pill-tabs">
           <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='mobile'?'active':''}" onclick="setManualRecipientType('mobile')">${STATE.lang==='ar'?'إدخال رقم جوال':'Enter Mobile Number'}</div>
@@ -3353,15 +3453,13 @@ function renderWhatsAppAdminSections(){
       ${selectedTemplate? `<div style="margin-bottom:10px;"><span class="badge ${selectedTemplate.status==='Approved'?'b-green':selectedTemplate.status==='Rejected'?'b-red':'b-amber'}">${STATE.lang==='ar'?'حالة القالب':'Template status'}: ${selectedTemplate.status}</span>${!templateOk?` <span class="muted" style="font-size:11px;">${STATE.lang==='ar'?'— لا يمكن الإرسال حتى تُعتمد القالب من الإدارة (القسم 6 أدناه)':'— sending is blocked until this template is Approved (Section 6 below)'}</span>`:''}</div>`:''}
 
       <div class="field"><label>${STATE.lang==='ar'?'معاينة الرسالة':'Message Preview'}</label>
-        <div class="side-note" style="white-space:pre-wrap;font-size:11.8px;">${esc(manualMessagePreviewText())}</div>
+        <div id="ms-live-preview" class="side-note" style="white-space:pre-wrap;font-size:11.8px;">${esc(manualMessagePreviewText())}</div>
       </div>
 
       <div class="btn-row" style="margin-top:12px;">
-        <button class="btn btn-primary btn-sm" ${!round||!templateOk?'disabled':''} onclick="confirmManualSend(0)">${STATE.lang==='ar'?'إرسال الآن':'Send Now'}</button>
-        <button class="btn btn-ghost btn-sm" ${!round||!templateOk?'disabled':''} onclick="confirmManualSend(60000)">${STATE.lang==='ar'?'إرسال بعد دقيقة':'Send After 1 Minute'}</button>
-        <button class="btn btn-ghost btn-sm" ${!round||!templateOk?'disabled':''} onclick="confirmManualSend(300000)">${STATE.lang==='ar'?'إرسال بعد 5 دقائق':'Send After 5 Minutes'}</button>
+        <button class="btn btn-primary btn-sm" ${!round?'disabled':''} onclick="confirmManualSend(0)">${STATE.lang==='ar'?'إرسال الآن':'Send Now'}</button>
       </div>
-      <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'الإرسال المؤجل (بعد دقيقة/5 دقائق) يعمل عبر مؤقّت في هذا المتصفح — يجب إبقاء الصفحة مفتوحة حتى وقت الإرسال.':'Delayed sends (1/5 minutes) run as a timer in this browser tab — keep the page open until the send time.'}</div>
+      <div class="muted" style="font-size:10.6px;margin-top:8px;">${STATE.lang==='ar'?'يمكنك إرسال التذكير يدويًا في أي وقت؛ لا يشترط أن يكون قبل الجولة بـ24 ساعة أو ساعة فعلية.':'You can send manually at any time; the system does not require an actual 24-hour or 1-hour interval.'}</div>
       <div id="ms-result"></div>
     </div>
   </div>
@@ -3519,7 +3617,15 @@ async function executeManualSend(delayMs){
     try{
       const res = await fetch('/api/whatsapp?action=manual-send', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ round_id: round.id, recipients, language, template_name: templateName, sent_by: currentActorName() })
+        body: JSON.stringify({
+          round_id: round.id,
+          recipients,
+          language,
+          template_name: templateName,
+          message_type: WA_ADMIN_STATE.messageType,
+          custom_message: WA_ADMIN_STATE.customMessage,
+          sent_by: currentActorName()
+        })
       });
       const data = await res.json();
       const rows = data.results || [];
@@ -4451,6 +4557,7 @@ if(isPublicRoundPath()){
   renderShell();
   render();
   loadRoundMembers();
+  loadLiveRounds();
   refreshWhatsAppBackendStatus(true);
 }
 </script>
