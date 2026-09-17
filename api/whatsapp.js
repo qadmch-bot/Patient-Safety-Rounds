@@ -25,6 +25,7 @@ import { normalizeToE164 } from "../lib/phone.js";
   5) استقبال ردود WhatsApp:
      - تأكيد الحضور
      - تعذر الحضور
+  6) حفظ حالة الحضور في round_participants
 */
 
 const ATTENDANCE_TEMPLATE_NAME =
@@ -46,11 +47,9 @@ export default async function handler(req, res) {
 
   try {
 
-    /*
-      ================================================
-      INCOMING WHATSAPP MESSAGE / QUICK REPLY
-      ================================================
-    */
+    /* =====================================================
+       INCOMING WHATSAPP MESSAGE / QUICK REPLY
+       ===================================================== */
 
     if (
       req.method === "POST" &&
@@ -73,17 +72,20 @@ export default async function handler(req, res) {
       return await handleDirectSend(req, res);
     }
 
-    /*
-      GET بدون action:
-      يفيدنا لاختبار أن endpoint يعمل
-    */
 
-    if (req.method === "GET" && !action) {
+    /* اختبار الـ endpoint */
+
+    if (
+      req.method === "GET" &&
+      !action
+    ) {
 
       return res.status(200).json({
         success: true,
-        message: "WhatsApp endpoint is ready",
-        incoming_webhook: true
+        message:
+          "WhatsApp endpoint is ready",
+        incoming_webhook:
+          true
       });
     }
 
@@ -98,7 +100,10 @@ export default async function handler(req, res) {
 
     if (handleConfigError(res, error)) return;
 
-    console.error("WhatsApp API error:", error);
+    console.error(
+      "WhatsApp API error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -117,19 +122,32 @@ export default async function handler(req, res) {
 
 async function handleIncomingWhatsApp(req, res) {
 
-  const body = req.body || {};
+  const body =
+    req.body || {};
+
 
   const from =
-    String(body.From || "").trim();
+    String(
+      body.From || ""
+    ).trim();
+
 
   const messageBody =
-    String(body.Body || "").trim();
+    String(
+      body.Body || ""
+    ).trim();
+
 
   const buttonPayload =
-    String(body.ButtonPayload || "").trim();
+    String(
+      body.ButtonPayload || ""
+    ).trim();
+
 
   const buttonText =
-    String(body.ButtonText || "").trim();
+    String(
+      body.ButtonText || ""
+    ).trim();
 
 
   /*
@@ -138,8 +156,14 @@ async function handleIncomingWhatsApp(req, res) {
 
   const phone =
     from
-      .replace(/^whatsapp:/i, "")
-      .replace(/^\+/, "")
+      .replace(
+        /^whatsapp:/i,
+        ""
+      )
+      .replace(
+        /^\+/,
+        ""
+      )
       .trim();
 
 
@@ -147,43 +171,57 @@ async function handleIncomingWhatsApp(req, res) {
     تحديد نوع الرد
   */
 
-  let attendanceStatus = null;
+  let attendanceStatus =
+    null;
 
 
   if (
-    buttonPayload === "attendance_confirmed" ||
-    messageBody === "تأكيد الحضور" ||
-    buttonText === "تأكيد الحضور"
+    buttonPayload ===
+      "attendance_confirmed" ||
+
+    messageBody ===
+      "تأكيد الحضور" ||
+
+    buttonText ===
+      "تأكيد الحضور"
   ) {
 
-    attendanceStatus = "Confirmed";
+    attendanceStatus =
+      "Confirmed";
   }
 
 
   if (
-    buttonPayload === "attendance_declined" ||
-    messageBody === "تعذر الحضور" ||
-    buttonText === "تعذر الحضور"
+    buttonPayload ===
+      "attendance_declined" ||
+
+    messageBody ===
+      "تعذر الحضور" ||
+
+    buttonText ===
+      "تعذر الحضور"
   ) {
 
-    attendanceStatus = "Declined";
+    attendanceStatus =
+      "Declined";
   }
 
 
-  console.log("WhatsApp inbound message:", {
-
-    from,
-    phone,
-    messageBody,
-    buttonPayload,
-    buttonText,
-    attendanceStatus
-
-  });
+  console.log(
+    "WhatsApp inbound message:",
+    {
+      from,
+      phone,
+      messageBody,
+      buttonPayload,
+      buttonText,
+      attendanceStatus
+    }
+  );
 
 
   /*
-    إذا كانت رسالة عادية وليست رد حضور
+    رسالة عادية وليست رد حضور
   */
 
   if (!attendanceStatus) {
@@ -193,23 +231,28 @@ async function handleIncomingWhatsApp(req, res) {
       received: true,
       attendance: false,
       phone,
-      message: messageBody
+      message:
+        messageBody
     });
   }
 
 
-  /*
-    البحث عن العضو حسب رقم الجوال
-  */
+  /* =====================================================
+     FIND MEMBER BY MOBILE
+     ===================================================== */
 
   let members = [];
 
+
   try {
 
-    members = await sbGet(
-      "round_members",
-      `?mobile=eq.${encodeURIComponent(phone)}`
-    );
+    members =
+      await sbGet(
+        "round_members",
+        `?mobile=eq.${encodeURIComponent(
+          phone
+        )}`
+      );
 
   } catch (error) {
 
@@ -221,20 +264,20 @@ async function handleIncomingWhatsApp(req, res) {
 
 
   /*
-    إذا لم نجد الرقم بدون +
-    نجرب بصيغة +966...
+    نجرب الرقم مع +
   */
 
   if (!members.length) {
 
     try {
 
-      members = await sbGet(
-        "round_members",
-        `?mobile=eq.${encodeURIComponent(
-          "+" + phone
-        )}`
-      );
+      members =
+        await sbGet(
+          "round_members",
+          `?mobile=eq.${encodeURIComponent(
+            "+" + phone
+          )}`
+        );
 
     } catch (error) {
 
@@ -252,19 +295,22 @@ async function handleIncomingWhatsApp(req, res) {
       : null;
 
 
-  /*
-    البحث عن أحدث رسالة جولة مرسلة لهذا الرقم.
-    هذا يسمح لنا بمعرفة الجولة المرتبطة بالرد.
-  */
+  /* =====================================================
+     FIND LATEST ROUND MESSAGE FOR THIS MOBILE
+     ===================================================== */
 
   let sentMessages = [];
 
+
   try {
 
-    sentMessages = await sbGet(
-      "whatsapp_manual_messages",
-      `?recipient_mobile=ilike.*${encodeURIComponent(phone)}*&status=eq.sent&order=created_at.desc&limit=1`
-    );
+    sentMessages =
+      await sbGet(
+        "whatsapp_manual_messages",
+        `?recipient_mobile=ilike.*${encodeURIComponent(
+          phone
+        )}*&status=eq.sent&order=created_at.desc&limit=1`
+      );
 
   } catch (error) {
 
@@ -286,19 +332,147 @@ async function handleIncomingWhatsApp(req, res) {
     null;
 
 
-  /*
-    تسجيل الحدث في Audit Trail.
-    لا نفترض وجود أعمدة attendance داخل
-    round_participants حتى لا نخاطر بكسر النظام.
-  */
+  /* =====================================================
+     SAVE ATTENDANCE IN ROUND PARTICIPANTS
+     ===================================================== */
+
+  let attendanceSaved =
+    false;
+
+
+  if (
+    roundId &&
+    member?.id
+  ) {
+
+    try {
+
+      /*
+        البحث عن العضو داخل نفس الجولة
+      */
+
+      const participants =
+        await sbGet(
+          "round_participants",
+          `?round_id=eq.${encodeURIComponent(
+            roundId
+          )}&member_id=eq.${encodeURIComponent(
+            member.id
+          )}`
+        );
+
+
+      /*
+        العضو موجود بالفعل
+      */
+
+      if (participants.length) {
+
+        await sbPatch(
+          "round_participants",
+          `?round_id=eq.${encodeURIComponent(
+            roundId
+          )}&member_id=eq.${encodeURIComponent(
+            member.id
+          )}`,
+          {
+            attendance_status:
+              attendanceStatus,
+
+            attendance_responded_at:
+              new Date()
+                .toISOString()
+          }
+        );
+
+
+        attendanceSaved =
+          true;
+
+
+        console.log(
+          "Attendance saved successfully:",
+          {
+            roundId,
+            memberId:
+              member.id,
+            memberName:
+              member.full_name,
+            attendanceStatus
+          }
+        );
+      }
+
+
+      /*
+        العضو غير موجود في round_participants
+        نضيفه تلقائياً للجولة
+      */
+
+      else {
+
+        await sbInsert(
+          "round_participants",
+          [
+            {
+              round_id:
+                roundId,
+
+              member_id:
+                member.id,
+
+              attendance_status:
+                attendanceStatus,
+
+              attendance_responded_at:
+                new Date()
+                  .toISOString()
+            }
+          ]
+        );
+
+
+        attendanceSaved =
+          true;
+
+
+        console.log(
+          "Participant created and attendance saved:",
+          {
+            roundId,
+            memberId:
+              member.id,
+            memberName:
+              member.full_name,
+            attendanceStatus
+          }
+        );
+      }
+
+    } catch (error) {
+
+      console.error(
+        "Unable to save attendance:",
+        error
+      );
+    }
+  }
+
+
+  /* =====================================================
+     AUDIT TRAIL
+     ===================================================== */
 
   try {
 
     await logAudit({
 
       action:
-        attendanceStatus === "Confirmed"
+        attendanceStatus ===
+        "Confirmed"
+
           ? "WhatsApp Attendance Confirmed"
+
           : "WhatsApp Attendance Declined",
 
       entity_type:
@@ -316,6 +490,9 @@ async function handleIncomingWhatsApp(req, res) {
 
         attendance_status:
           attendanceStatus,
+
+        attendance_saved:
+          attendanceSaved,
 
         round_id:
           roundId,
@@ -341,16 +518,12 @@ async function handleIncomingWhatsApp(req, res) {
           buttonText,
 
         received_at:
-          new Date().toISOString()
+          new Date()
+            .toISOString()
       }
     });
 
   } catch (error) {
-
-    /*
-      لا نفشل Webhook إذا تعذر Audit Trail.
-      Twilio يجب أن يحصل على HTTP 200.
-    */
 
     console.error(
       "Attendance audit log error:",
@@ -359,16 +532,22 @@ async function handleIncomingWhatsApp(req, res) {
   }
 
 
-  /*
-    النتيجة
-  */
+  /* =====================================================
+     LOG RESULT
+     ===================================================== */
 
   console.log(
     "Attendance response processed:",
     {
-      status: attendanceStatus,
+      status:
+        attendanceStatus,
+
+      attendanceSaved,
+
       roundId,
+
       phone,
+
       member:
         member?.full_name ||
         null
@@ -376,13 +555,20 @@ async function handleIncomingWhatsApp(req, res) {
   );
 
 
+  /* =====================================================
+     RESPONSE TO TWILIO
+     ===================================================== */
+
   return res.status(200).json({
 
-    success: true,
+    success:
+      true,
 
-    received: true,
+    received:
+      true,
 
-    attendance: true,
+    attendance:
+      true,
 
     attendance_status:
       attendanceStatus,
@@ -390,18 +576,22 @@ async function handleIncomingWhatsApp(req, res) {
     round_id:
       roundId,
 
-    member: member
-      ? {
-          id:
-            member.id,
+    attendance_saved:
+      attendanceSaved,
 
-          name:
-            member.full_name,
+    member:
+      member
+        ? {
+            id:
+              member.id,
 
-          mobile:
-            member.mobile
-        }
-      : null,
+            name:
+              member.full_name,
+
+            mobile:
+              member.mobile
+          }
+        : null,
 
     phone
   });
@@ -412,14 +602,22 @@ async function handleIncomingWhatsApp(req, res) {
    WHATSAPP TEMPLATES
    ========================================================= */
 
-async function handleTemplates(req, res) {
+async function handleTemplates(
+  req,
+  res
+) {
 
-  if (req.method === "GET") {
+  if (
+    req.method ===
+    "GET"
+  ) {
 
-    const templates = await sbGet(
-      "whatsapp_templates",
-      "?order=name.asc"
-    );
+    const templates =
+      await sbGet(
+        "whatsapp_templates",
+        "?order=name.asc"
+      );
+
 
     return res.status(200).json({
       success: true,
@@ -428,9 +626,14 @@ async function handleTemplates(req, res) {
   }
 
 
-  if (req.method === "PATCH") {
+  if (
+    req.method ===
+    "PATCH"
+  ) {
 
-    const name = req.query.name;
+    const name =
+      req.query.name;
+
 
     if (!name) {
 
@@ -442,7 +645,8 @@ async function handleTemplates(req, res) {
     }
 
 
-    const body = req.body || {};
+    const body =
+      req.body || {};
 
 
     if (
@@ -450,7 +654,9 @@ async function handleTemplates(req, res) {
         "Approved",
         "Pending",
         "Rejected"
-      ].includes(body.status)
+      ].includes(
+        body.status
+      )
     ) {
 
       return res.status(400).json({
@@ -461,17 +667,21 @@ async function handleTemplates(req, res) {
     }
 
 
-    const updated = await sbPatch(
-      "whatsapp_templates",
-      `?name=eq.${encodeURIComponent(name)}`,
-      {
-        status:
-          body.status,
+    const updated =
+      await sbPatch(
+        "whatsapp_templates",
+        `?name=eq.${encodeURIComponent(
+          name
+        )}`,
+        {
+          status:
+            body.status,
 
-        updated_at:
-          new Date().toISOString()
-      }
-    );
+          updated_at:
+            new Date()
+              .toISOString()
+        }
+      );
 
 
     await logAudit({
@@ -515,7 +725,9 @@ async function handleTemplates(req, res) {
    ROUND DATE
    ========================================================= */
 
-function formatRoundDate(round) {
+function formatRoundDate(
+  round
+) {
 
   const raw =
     round.planned_date ||
@@ -526,6 +738,7 @@ function formatRoundDate(round) {
 
 
   if (!raw) {
+
     return "حسب الموعد المحدد";
   }
 
@@ -536,8 +749,14 @@ function formatRoundDate(round) {
     )
   ) {
 
-    const [year, month, day] =
-      String(raw).split("-");
+    const [
+      year,
+      month,
+      day
+    ] =
+      String(raw)
+        .split("-");
+
 
     return `${day}/${month}/${year}`;
   }
@@ -548,11 +767,13 @@ function formatRoundDate(round) {
     const date =
       new Date(raw);
 
+
     if (
       Number.isNaN(
         date.getTime()
       )
     ) {
+
       return String(raw);
     }
 
@@ -585,7 +806,9 @@ function formatRoundDate(round) {
    ROUND TIME
    ========================================================= */
 
-function formatRoundTime(round) {
+function formatRoundTime(
+  round
+) {
 
   const direct =
     round.planned_time ||
@@ -598,7 +821,10 @@ function formatRoundTime(round) {
   if (direct) {
 
     return String(direct)
-      .slice(0, 5);
+      .slice(
+        0,
+        5
+      );
   }
 
 
@@ -658,7 +884,9 @@ function formatRoundTime(round) {
    CORRECTIVE PLAN MESSAGE
    ========================================================= */
 
-function buildPlanFallbackMessage(round) {
+function buildPlanFallbackMessage(
+  round
+) {
 
   return `تذكير برفع الخطة التصحيحية والأدلة
 
@@ -673,20 +901,28 @@ function buildPlanFallbackMessage(round) {
    MANUAL WHATSAPP SEND
    ========================================================= */
 
-async function handleManualSend(req, res) {
+async function handleManualSend(
+  req,
+  res
+) {
 
 
   /* -------------------------
      GET MESSAGE HISTORY
      ------------------------- */
 
-  if (req.method === "GET") {
+  if (
+    req.method ===
+    "GET"
+  ) {
 
     let query =
       "?order=created_at.desc&limit=200";
 
 
-    if (req.query.round_id) {
+    if (
+      req.query.round_id
+    ) {
 
       query +=
         `&round_id=eq.${encodeURIComponent(
@@ -695,7 +931,9 @@ async function handleManualSend(req, res) {
     }
 
 
-    if (req.query.status) {
+    if (
+      req.query.status
+    ) {
 
       query +=
         `&status=eq.${encodeURIComponent(
@@ -704,7 +942,9 @@ async function handleManualSend(req, res) {
     }
 
 
-    if (req.query.recipient) {
+    if (
+      req.query.recipient
+    ) {
 
       query +=
         `&recipient_mobile=ilike.*${encodeURIComponent(
@@ -713,7 +953,9 @@ async function handleManualSend(req, res) {
     }
 
 
-    if (req.query.date) {
+    if (
+      req.query.date
+    ) {
 
       query +=
         `&created_at=gte.${encodeURIComponent(
@@ -741,7 +983,10 @@ async function handleManualSend(req, res) {
      POST MANUAL MESSAGE
      ------------------------- */
 
-  if (req.method !== "POST") {
+  if (
+    req.method !==
+    "POST"
+  ) {
 
     return res.status(405).json({
       success: false,
@@ -760,7 +1005,9 @@ async function handleManualSend(req, res) {
     "round_notice";
 
 
-  if (!body.round_id) {
+  if (
+    !body.round_id
+  ) {
 
     return res.status(400).json({
       success: false,
@@ -798,7 +1045,9 @@ async function handleManualSend(req, res) {
     );
 
 
-  if (!rounds.length) {
+  if (
+    !rounds.length
+  ) {
 
     return res.status(404).json({
       success: false,
@@ -813,14 +1062,19 @@ async function handleManualSend(req, res) {
 
 
   const roundDate =
-    formatRoundDate(round);
+    formatRoundDate(
+      round
+    );
 
 
   const roundTime =
-    formatRoundTime(round);
+    formatRoundTime(
+      round
+    );
 
 
-  const results = [];
+  const results =
+    [];
 
 
   /* =====================================================
@@ -853,11 +1107,15 @@ async function handleManualSend(req, res) {
         "",
 
       language:
-        body.language === "en"
+        body.language ===
+        "en"
+
           ? "en"
+
           : "ar",
 
       template_name:
+
         messageType ===
         "plan_reminder"
 
@@ -1126,7 +1384,6 @@ async function handleManualSend(req, res) {
      RESPONSE
      ===================================================== */
 
-
   const anySuccess =
     results.some(
       r =>
@@ -1220,7 +1477,9 @@ async function handleDirectSend(
     });
 
 
-  if (!result.success) {
+  if (
+    !result.success
+  ) {
 
     return res.status(500).json({
 
