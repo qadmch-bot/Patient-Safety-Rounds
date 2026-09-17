@@ -3433,9 +3433,188 @@ function renderWhatsAppAdminSections(){
           <option value="">${STATE.lang==='ar'?'اختر عضوًا':'Select a member'}</option>
           ${ROUND_MEMBERS.map(m=>`<option value="${m.id}" ${String(m.id)===String(WA_ADMIN_STATE.selectedMemberId)?'selected':''}>${esc(m.full_name)} – ${esc(m.job_title||'—')} – ${esc(m.mobile||(STATE.lang==='ar'?'لا يوجد جوال':'no mobile'))}</option>`).join('')}
         </select></div>` : ''}
-      ${WA_ADMIN_STATE.recipientType==='multiple'? `<div class="field"><label>${STATE.lang==='ar'?'الأعضاء':'Members'}</label><select id="ms-members" multiple size="6" onchange="onManualMultiMemberChange(this)">
-          ${ROUND_MEMBERS.map(m=>`<option value="${m.id}" ${WA_ADMIN_STATE.selectedMemberIds.includes(String(m.id))?'selected':''}>${esc(m.full_name)} – ${esc(m.job_title||'—')} – ${esc(m.mobile||(STATE.lang==='ar'?'لا يوجد جوال':'no mobile'))}</option>`).join('')}
-        </select></div>` : ''}
+      ${WA_ADMIN_STATE.recipientType==='multiple'? `
+<div class="field">
+  <label>${STATE.lang==='ar'?'اختيار الأعضاء':'Select Members'}</label>
+
+  <div style="
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:10px;
+    max-height:230px;
+    overflow-y:auto;
+    background:#fff;
+  ">
+
+    ${ROUND_MEMBERS.length ? ROUND_MEMBERS.map(m => {
+
+      const checked =
+        WA_ADMIN_STATE.selectedMemberIds.includes(String(m.id));
+
+      return `
+        <label style="
+          display:flex;
+          align-items:center;
+          gap:10px;
+          padding:9px;
+          border-bottom:1px solid var(--line-soft);
+          cursor:pointer;
+          margin:0;
+        ">
+
+          <input
+            type="checkbox"
+            value="${m.id}"
+            ${checked?'checked':''}
+            onchange="toggleManualMember('${m.id}', this.checked)"
+            style="
+              width:18px;
+              height:18px;
+              flex:none;
+            "
+          >
+
+          <span>
+            <b>${esc(m.full_name)}</b>
+
+            <span class="muted">
+
+              ${m.job_title
+                ? ' – '+esc(m.job_title)
+                : ''
+              }
+
+              ${m.mobile
+                ? ' – '+esc(m.mobile)
+                : ''
+              }
+
+            </span>
+          </span>
+
+        </label>
+      `;
+
+    }).join('') :
+
+    `
+      <div class="muted">
+        ${STATE.lang==='ar'
+          ? 'لا يوجد أعضاء محفوظون'
+          : 'No saved members'
+        }
+      </div>
+    `}
+
+  </div>
+
+
+  <!-- الأعضاء الذين تم اختيارهم -->
+
+  <div style="
+    margin-top:10px;
+    padding:10px 12px;
+    background:var(--teal-50);
+    border:1px solid var(--teal-100);
+    border-radius:8px;
+  ">
+
+    <b>
+      ${STATE.lang==='ar'
+        ? 'تم اختيار'
+        : 'Selected'
+      }:
+      ${WA_ADMIN_STATE.selectedMemberIds.length}
+    </b>
+
+
+    ${WA_ADMIN_STATE.selectedMemberIds.length ? `
+
+      <div style="
+        margin-top:8px;
+        display:flex;
+        flex-wrap:wrap;
+        gap:6px;
+      ">
+
+        ${ROUND_MEMBERS
+
+          .filter(m =>
+            WA_ADMIN_STATE.selectedMemberIds.includes(String(m.id))
+          )
+
+          .map(m => `
+
+            <span style="
+              display:inline-flex;
+              align-items:center;
+              gap:5px;
+              padding:5px 9px;
+              background:#fff;
+              border:1px solid var(--teal-100);
+              border-radius:20px;
+            ">
+
+              ${esc(m.full_name)}
+
+              <button
+                type="button"
+                onclick="removeManualMember('${m.id}')"
+                style="
+                  border:0;
+                  background:transparent;
+                  cursor:pointer;
+                  font-weight:bold;
+                  color:var(--red);
+                  padding:0 2px;
+                "
+              >
+                ×
+              </button>
+
+            </span>
+
+          `).join('')}
+
+      </div>
+
+    ` :
+
+    `
+      <div
+        class="muted"
+        style="margin-top:5px;"
+      >
+        ${STATE.lang==='ar'
+          ? 'لم يتم اختيار أي عضو بعد'
+          : 'No members selected yet'
+        }
+      </div>
+    `}
+
+  </div>
+
+
+  ${WA_ADMIN_STATE.selectedMemberIds.length ? `
+
+    <button
+      type="button"
+      class="btn btn-ghost btn-sm"
+      style="margin-top:8px;"
+      onclick="clearManualMembers()"
+    >
+
+      ${STATE.lang==='ar'
+        ? 'إلغاء تحديد الجميع'
+        : 'Clear All'
+      }
+
+    </button>
+
+  ` : ''}
+
+</div>
+` : ''}
 
       <div class="field-row">
         <div class="field"><label>${STATE.lang==='ar'?'لغة الرسالة':'Message Language'}</label>
@@ -3568,8 +3747,32 @@ function onManualSingleMemberChange(id){
   if(m && m.preferred_language) WA_ADMIN_STATE.language = m.preferred_language;
   go('admin',{tab:'whatsapp'});
 }
-function onManualMultiMemberChange(el){
-  WA_ADMIN_STATE.selectedMemberIds = Array.from(el.selectedOptions).map(o=>o.value);
+function toggleManualMember(id, checked){
+  id = String(id);
+
+  if(checked){
+    if(!WA_ADMIN_STATE.selectedMemberIds.includes(id)){
+      WA_ADMIN_STATE.selectedMemberIds.push(id);
+    }
+  } else {
+    WA_ADMIN_STATE.selectedMemberIds =
+      WA_ADMIN_STATE.selectedMemberIds.filter(x => String(x) !== id);
+  }
+
+  go('admin',{tab:'whatsapp'});
+}
+
+function removeManualMember(id){
+  id = String(id);
+
+  WA_ADMIN_STATE.selectedMemberIds =
+    WA_ADMIN_STATE.selectedMemberIds.filter(x => String(x) !== id);
+
+  go('admin',{tab:'whatsapp'});
+}
+
+function clearManualMembers(){
+  WA_ADMIN_STATE.selectedMemberIds = [];
   go('admin',{tab:'whatsapp'});
 }
 function filterManualHistory(){
