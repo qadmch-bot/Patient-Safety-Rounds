@@ -1422,7 +1422,23 @@ function setRole(r){ STATE.role=r; if(r!=='department') {} go('dashboard'); }
 function setMyDept(d){ STATE.myDept=d; render(); }
 function onGlobalSearch(v){ /* live search reserved for Enter-triggered results */ }
 
-function go(view, params){ STATE.view=view; STATE.params=params||{}; closeDropdowns(); window.scrollTo(0,0); renderShell(); render(); }
+function saveCurrentRoute(){
+  try{
+    localStorage.setItem('psr_last_route', JSON.stringify({view:STATE.view, params:STATE.params||{}}));
+  }catch(e){}
+}
+function restoreCurrentRoute(){
+  try{
+    const raw=localStorage.getItem('psr_last_route');
+    if(!raw) return;
+    const saved=JSON.parse(raw);
+    if(saved && typeof saved.view==='string'){
+      STATE.view=saved.view;
+      STATE.params=(saved.params && typeof saved.params==='object')?saved.params:{};
+    }
+  }catch(e){}
+}
+function go(view, params){ STATE.view=view; STATE.params=params||{}; saveCurrentRoute(); closeDropdowns(); window.scrollTo(0,0); renderShell(); render(); }
 
 /* ================================================================
    VIEW RENDERERS
@@ -3273,25 +3289,31 @@ async function renderWhatsAppAdminAsync(){
     WA_ADMIN_STATE.templates = templatesRes.success? templatesRes.templates : [];
     WA_ADMIN_STATE.manualHistory = manualRes.success? manualRes.messages : [];
     WA_ADMIN_STATE.autoHistory = autoRes.success? autoRes.reminders : [];
+    if(!WA_ADMIN_STATE.selectedRoundId){
+      try{
+        const savedRound = localStorage.getItem('psr_selected_attendance_round');
+        if(savedRound && WA_ADMIN_STATE.rounds.some(r=>String(r.id)===String(savedRound))) WA_ADMIN_STATE.selectedRoundId = savedRound;
+      }catch(e){}
+    }
     if(!WA_ADMIN_STATE.selectedRoundId && WA_ADMIN_STATE.rounds.length) WA_ADMIN_STATE.selectedRoundId = WA_ADMIN_STATE.rounds[0].id;
 
-    // Load the selected round participants with their WhatsApp attendance response.
-    WA_ADMIN_STATE.attendanceByMember = {};
+    // Attendance belongs to a specific round, never to the master member roster.
+    WA_ADMIN_STATE.attendanceParticipants = [];
     if(WA_ADMIN_STATE.selectedRoundId){
       try{
         const detail = await fetch('/api/rounds?id='+encodeURIComponent(WA_ADMIN_STATE.selectedRoundId)).then(r=>r.json());
         if(detail.success && Array.isArray(detail.participants)){
-          detail.participants.forEach(p=>{
-            const memberId = p.member_id ?? p.round_members?.id;
-            if(memberId!==undefined && memberId!==null){
-              WA_ADMIN_STATE.attendanceByMember[String(memberId)] = {
-                status: p.attendance_status || 'Pending',
-                respondedAt: p.attendance_responded_at || null
-              };
-            }
-          });
+          WA_ADMIN_STATE.attendanceParticipants = detail.participants.map(p=>{
+            const m = p.round_members || {};
+            return {
+              ...m,
+              member_id: p.member_id ?? m.id,
+              attendance_status: p.attendance_status || m.attendance_status || 'Pending',
+              attendance_responded_at: p.attendance_responded_at || m.attendance_responded_at || null
+            };
+          }).filter(m=>m.id!==undefined || m.member_id!==undefined);
         }
-      }catch(e){ /* keep Pending when detail cannot be loaded */ }
+      }catch(e){ WA_ADMIN_STATE.attendanceParticipants = []; }
     }
 
     if(!WA_ADMIN_STATE.templates.some(t=>t.name===WA_ADMIN_STATE.templateName) && WA_ADMIN_STATE.templates.length) WA_ADMIN_STATE.templateName = WA_ADMIN_STATE.templates[0].name;
@@ -3676,22 +3698,53 @@ function renderWhatsAppAdminSections(){
     </div>
   </div>
 
-  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">5. ${t('round_reminders_nav')==='Send Round Reminders'?'Patient Safety Rounds Members':'أعضاء جولات سلامة المرضى'}</h3>
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">5. ${STATE.lang==='ar'?'حضور أعضاء الجولة':'Round Attendance'}</h3>
   <div class="card" style="margin-bottom:16px;">
-    <div class="card-head"><h3>${STATE.lang==='ar'?'أعضاء جولات سلامة المرضى':'Patient Safety Rounds Members'}</h3>
+    <div class="card-head"><h3>${STATE.lang==='ar'?'حضور أعضاء الجولة':'Round Attendance'}</h3>
+      <span class="hint">${STATE.lang==='ar'?'كل جولة لها قائمة وحالة حضور مستقلة':'Each round has its own attendance list'}</span>
+    </div>
+    <div class="card-pad">
+      <div class="field" style="max-width:620px;margin-bottom:14px;">
+        <label>${STATE.lang==='ar'?'اختر الجولة':'Select Round'}</label>
+        <select onchange="onAttendanceRoundChange(this.value)">
+          ${WA_ADMIN_STATE.rounds.map(r=>`<option value="${r.id}" ${String(r.id)===String(WA_ADMIN_STATE.selectedRoundId)?'selected':''}>${esc(r.id)} — ${(r.departments||[]).map(deptName).join(' + ')} — ${fmtDate(r.planned_date)} — ${esc(r.planned_time||'')}</option>`).join('') || `<option value="">${STATE.lang==='ar'?'لا توجد جولات محفوظة':'No saved rounds'}</option>`}
+        </select>
+      </div>
+      ${WA_ADMIN_STATE.selectedRoundId ? `
+        <div class="side-note" style="margin-bottom:12px;">
+          <b>${esc(WA_ADMIN_STATE.selectedRoundId)}</b> — ${STATE.lang==='ar'?'هذه الحالات تخص هذه الجولة فقط، ولا تنتقل إلى أي جولة جديدة.':'These attendance statuses belong only to this round and do not carry over to a new round.'}
+        </div>
+        <div class="table-wrap"><table><thead><tr>
+          <th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'المسمى الوظيفي':'Job Title'}</th><th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th>
+          <th>${STATE.lang==='ar'?'حالة الحضور':'Attendance'}</th><th>${STATE.lang==='ar'?'وقت الرد':'Response Time'}</th>
+        </tr></thead><tbody>
+          ${WA_ADMIN_STATE.attendanceParticipants.length ? WA_ADMIN_STATE.attendanceParticipants.map(m=>`<tr>
+            <td><b>${esc(m.full_name||'—')}</b></td>
+            <td>${esc(m.job_title||'—')}</td>
+            <td>${esc(m.mobile||'—')}</td>
+            <td>${attendanceBadgeHtml(m.attendance_status, m.attendance_responded_at)}</td>
+            <td class="muted">${m.attendance_responded_at ? new Date(m.attendance_responded_at).toLocaleString(STATE.lang==='ar'?'ar-SA':'en-US') : '—'}</td>
+          </tr>`).join('') : `<tr><td colspan="5"><div class="empty">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة. أضيفي أعضاء الجولة من شاشة إنشاء/تعديل الجولة.':'No members are linked to this round. Add round members from the create/edit round screen.'}</div></td></tr>`}
+        </tbody></table></div>
+      ` : `<div class="empty">${STATE.lang==='ar'?'اختاري جولة لعرض الحضور':'Select a round to view attendance'}</div>`}
+    </div>
+  </div>
+
+  <h3 style="font-size:13px;color:var(--teal-800);margin:22px 0 8px;">5.1 ${STATE.lang==='ar'?'دليل أعضاء الجولات':'Round Members Directory'}</h3>
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-head"><h3>${STATE.lang==='ar'?'إدارة الأعضاء والأرقام':'Manage Members & Numbers'}</h3>
       <button class="btn btn-primary btn-sm" onclick="openMemberForm()">＋ ${STATE.lang==='ar'?'إضافة عضو':'Add Member'}</button>
     </div>
     <div class="card-pad">
       ${!ROUND_MEMBERS_LOADED? `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل من قاعدة البيانات...':'Loading from the database…'}</div>` :
       ROUND_MEMBERS.length? `<div class="table-wrap"><table><thead><tr>
         <th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'المسمى الوظيفي':'Job Title'}</th><th>${STATE.lang==='ar'?'القسم':'Department'}</th>
-        <th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'حالة الحضور':'Attendance'}</th><th>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp'}</th><th>${STATE.lang==='ar'?'نشط':'Active'}</th><th>${STATE.lang==='ar'?'اختبار':'Test'}</th><th></th>
+        <th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp'}</th><th>${STATE.lang==='ar'?'نشط':'Active'}</th><th>${STATE.lang==='ar'?'اختبار':'Test'}</th><th></th>
       </tr></thead><tbody>
       ${ROUND_MEMBERS.map(m=>`<tr>
         <td>${esc(m.full_name)}</td><td>${esc(m.job_title||'—')}</td><td>${m.department==='ALL'?(STATE.lang==='ar'?'الكل':'All'):deptName(m.department)}</td>
         <td><input style="width:140px;" value="${esc(m.mobile||'')}" placeholder="+9665XXXXXXXX" onchange="updateRoundMember('${m.id}',{mobile:this.value})"></td>
         <td><select onchange="updateRoundMember('${m.id}',{preferred_language:this.value})"><option value="ar" ${m.preferred_language==='ar'?'selected':''}>AR</option><option value="en" ${m.preferred_language==='en'?'selected':''}>EN</option></select></td>
-        <td>${(()=>{ const a=WA_ADMIN_STATE.attendanceByMember?.[String(m.id)] || {status:'Pending'}; return a.status==='Confirmed' ? `<span class="badge b-green">✅ ${STATE.lang==='ar'?'تم تأكيد الحضور':'Confirmed'}</span>` : a.status==='Declined' ? `<span class="badge b-red">❌ ${STATE.lang==='ar'?'تعذر الحضور':'Declined'}</span>` : `<span class="badge b-amber">⏳ ${STATE.lang==='ar'?'بانتظار الرد':'Pending'}</span>`; })()}</td>
         <td><input type="checkbox" ${m.whatsapp_enabled?'checked':''} onchange="updateRoundMember('${m.id}',{whatsapp_enabled:this.checked})"></td>
         <td><input type="checkbox" ${m.active?'checked':''} onchange="updateRoundMember('${m.id}',{active:this.checked})"></td>
         <td>${m.mobile? waMeButtonHtml(m.mobile, (m.preferred_language==='ar'?'رسالة اختبار من نظام إدارة جولات سلامة المرضى — مستشفى الولادة والأطفال، حفر الباطن.':'This is a test message from the Patient Safety Rounds Management System — Maternity & Children Hospital, Hafr Al Batin.'), STATE.lang==='ar'?'اختبار':'Test') : '—'}</td>
@@ -3699,7 +3752,6 @@ function renderWhatsAppAdminSections(){
       </tr>`).join('')}
       </tbody></table></div>` :
       `<div class="empty"><div class="eic">👥</div>${STATE.lang==='ar'?'لا يوجد أعضاء محفوظون بعد.':'No members saved yet.'}<div class="btn-row" style="justify-content:center;margin-top:12px;"><button class="btn btn-ghost btn-sm" onclick="importDefaultRoster()">${STATE.lang==='ar'?'استيراد القائمة الافتراضية':'Import default roster'}</button></div></div>`}
-      <div class="muted" style="font-size:10.6px;margin-top:10px;">${STATE.lang==='ar'?'يُحفظ كل تغيير مباشرة في قاعدة بيانات Supabase — لا تُفقد البيانات عند تحديث الصفحة أو الفتح من جهاز آخر.':'Every change is saved directly to Supabase — nothing is lost on refresh or when opened from another device.'}</div>
     </div>
   </div>
 
@@ -3760,7 +3812,16 @@ function renderWhatsAppAdminSections(){
   </div>`;
 }
 
-function onManualRoundChange(id){ WA_ADMIN_STATE.selectedRoundId = id; go('admin',{tab:'whatsapp'}); }
+function onAttendanceRoundChange(id){
+  WA_ADMIN_STATE.selectedRoundId = id;
+  try{ localStorage.setItem('psr_selected_attendance_round', String(id||'')); }catch(e){}
+  go('admin',{tab:'whatsapp'});
+}
+function onManualRoundChange(id){
+  WA_ADMIN_STATE.selectedRoundId = id;
+  try{ localStorage.setItem('psr_selected_attendance_round', String(id||'')); }catch(e){}
+  go('admin',{tab:'whatsapp'});
+}
 function setManualRecipientType(t){ WA_ADMIN_STATE.recipientType = t; go('admin',{tab:'whatsapp'}); }
 function onManualSingleMemberChange(id){
   WA_ADMIN_STATE.selectedMemberId = id;
@@ -4812,6 +4873,7 @@ if(isPublicRoundPath()){
 } else if(isPublicPlanPath()){
   bootPublicPlan();
 } else {
+  restoreCurrentRoute();
   renderShell();
   render();
   loadRoundMembers();
