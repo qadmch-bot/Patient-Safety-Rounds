@@ -3255,7 +3255,7 @@ function viewAdmin(){
    ================================================================ */
 let WA_ADMIN_STATE = {
   loaded:false, rounds:[], templates:[], manualHistory:[], autoHistory:[],
-  selectedRoundId:'', recipientType:'mobile', manualNumber:'', selectedMemberId:'', selectedMemberIds:[],
+  selectedRoundId:'', attendanceByMember:{}, recipientType:'mobile', manualNumber:'', selectedMemberId:'', selectedMemberIds:[],
   language:'ar', templateName:'patient_safety_round_attendance',
   messageType:'round_notice', customMessage:'',
 };
@@ -3274,6 +3274,26 @@ async function renderWhatsAppAdminAsync(){
     WA_ADMIN_STATE.manualHistory = manualRes.success? manualRes.messages : [];
     WA_ADMIN_STATE.autoHistory = autoRes.success? autoRes.reminders : [];
     if(!WA_ADMIN_STATE.selectedRoundId && WA_ADMIN_STATE.rounds.length) WA_ADMIN_STATE.selectedRoundId = WA_ADMIN_STATE.rounds[0].id;
+
+    // Load the selected round participants with their WhatsApp attendance response.
+    WA_ADMIN_STATE.attendanceByMember = {};
+    if(WA_ADMIN_STATE.selectedRoundId){
+      try{
+        const detail = await fetch('/api/rounds?id='+encodeURIComponent(WA_ADMIN_STATE.selectedRoundId)).then(r=>r.json());
+        if(detail.success && Array.isArray(detail.participants)){
+          detail.participants.forEach(p=>{
+            const memberId = p.member_id ?? p.round_members?.id;
+            if(memberId!==undefined && memberId!==null){
+              WA_ADMIN_STATE.attendanceByMember[String(memberId)] = {
+                status: p.attendance_status || 'Pending',
+                respondedAt: p.attendance_responded_at || null
+              };
+            }
+          });
+        }
+      }catch(e){ /* keep Pending when detail cannot be loaded */ }
+    }
+
     if(!WA_ADMIN_STATE.templates.some(t=>t.name===WA_ADMIN_STATE.templateName) && WA_ADMIN_STATE.templates.length) WA_ADMIN_STATE.templateName = WA_ADMIN_STATE.templates[0].name;
     WA_ADMIN_STATE.loaded = true;
   } catch(error){ /* leave whatever was previously loaded */ }
@@ -3665,12 +3685,13 @@ function renderWhatsAppAdminSections(){
       ${!ROUND_MEMBERS_LOADED? `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل من قاعدة البيانات...':'Loading from the database…'}</div>` :
       ROUND_MEMBERS.length? `<div class="table-wrap"><table><thead><tr>
         <th>${STATE.lang==='ar'?'الاسم':'Name'}</th><th>${STATE.lang==='ar'?'المسمى الوظيفي':'Job Title'}</th><th>${STATE.lang==='ar'?'القسم':'Department'}</th>
-        <th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp'}</th><th>${STATE.lang==='ar'?'نشط':'Active'}</th><th>${STATE.lang==='ar'?'اختبار':'Test'}</th><th></th>
+        <th>${STATE.lang==='ar'?'الجوال':'Mobile'}</th><th>${STATE.lang==='ar'?'اللغة':'Language'}</th><th>${STATE.lang==='ar'?'حالة الحضور':'Attendance'}</th><th>${STATE.lang==='ar'?'واتساب مفعّل':'WhatsApp'}</th><th>${STATE.lang==='ar'?'نشط':'Active'}</th><th>${STATE.lang==='ar'?'اختبار':'Test'}</th><th></th>
       </tr></thead><tbody>
       ${ROUND_MEMBERS.map(m=>`<tr>
         <td>${esc(m.full_name)}</td><td>${esc(m.job_title||'—')}</td><td>${m.department==='ALL'?(STATE.lang==='ar'?'الكل':'All'):deptName(m.department)}</td>
         <td><input style="width:140px;" value="${esc(m.mobile||'')}" placeholder="+9665XXXXXXXX" onchange="updateRoundMember('${m.id}',{mobile:this.value})"></td>
         <td><select onchange="updateRoundMember('${m.id}',{preferred_language:this.value})"><option value="ar" ${m.preferred_language==='ar'?'selected':''}>AR</option><option value="en" ${m.preferred_language==='en'?'selected':''}>EN</option></select></td>
+        <td>${(()=>{ const a=WA_ADMIN_STATE.attendanceByMember?.[String(m.id)] || {status:'Pending'}; return a.status==='Confirmed' ? `<span class="badge b-green">✅ ${STATE.lang==='ar'?'تم تأكيد الحضور':'Confirmed'}</span>` : a.status==='Declined' ? `<span class="badge b-red">❌ ${STATE.lang==='ar'?'تعذر الحضور':'Declined'}</span>` : `<span class="badge b-amber">⏳ ${STATE.lang==='ar'?'بانتظار الرد':'Pending'}</span>`; })()}</td>
         <td><input type="checkbox" ${m.whatsapp_enabled?'checked':''} onchange="updateRoundMember('${m.id}',{whatsapp_enabled:this.checked})"></td>
         <td><input type="checkbox" ${m.active?'checked':''} onchange="updateRoundMember('${m.id}',{active:this.checked})"></td>
         <td>${m.mobile? waMeButtonHtml(m.mobile, (m.preferred_language==='ar'?'رسالة اختبار من نظام إدارة جولات سلامة المرضى — مستشفى الولادة والأطفال، حفر الباطن.':'This is a test message from the Patient Safety Rounds Management System — Maternity & Children Hospital, Hafr Al Batin.'), STATE.lang==='ar'?'اختبار':'Test') : '—'}</td>
