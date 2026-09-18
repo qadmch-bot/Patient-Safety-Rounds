@@ -64,6 +64,34 @@ export default async function handler(req, res) {
       return await handleTemplates(req, res);
     }
 
+    if (action === "reminders-log") {
+      if (req.method !== "GET") return res.status(405).json({ success:false, error:"Method not allowed" });
+      const [reminders, activity] = await Promise.all([
+        sbGet("whatsapp_reminders", "?order=created_at.desc&limit=500"),
+        sbGet("secure_link_activity", "?order=last_opened_at.desc&limit=500")
+      ]);
+      return res.status(200).json({ success:true, reminders, activity });
+    }
+
+    if (action === "status") {
+      if (req.method !== "POST") return res.status(405).json({ success:false, error:"Method not allowed" });
+      const b = req.body || {};
+      const sid = b.MessageSid || b.SmsSid;
+      const status = String(b.MessageStatus || b.SmsStatus || "").toLowerCase();
+      if (!sid || !status) return res.status(400).json({ success:false, error:"Missing MessageSid/MessageStatus" });
+      const patch = { status, updated_at:new Date().toISOString() };
+      if (status === "delivered") patch.delivered_at = new Date().toISOString();
+      if (status === "read") patch.read_at = new Date().toISOString();
+      if (["failed","undelivered"].includes(status)) {
+        patch.failed_at = new Date().toISOString();
+        patch.error_code = b.ErrorCode || null;
+        patch.error_message = b.ErrorMessage || null;
+      }
+      await sbPatch("whatsapp_reminders", `?twilio_message_sid=eq.${encodeURIComponent(sid)}`, patch).catch(()=>[]);
+      await sbPatch("whatsapp_manual_messages", `?message_sid=eq.${encodeURIComponent(sid)}`, patch).catch(()=>[]);
+      return res.status(200).json({ success:true });
+    }
+
     if (action === "manual-send") {
       return await handleManualSend(req, res);
     }
