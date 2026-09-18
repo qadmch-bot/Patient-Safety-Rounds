@@ -11,10 +11,6 @@
   ],
   "crons": [
     {
-      "path": "/api/process-reminders?type=round",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/process-reminders?type=plan",
       "schedule": "0 8 * * *"
     }
