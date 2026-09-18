@@ -908,19 +908,19 @@ function planForObs(obsId){ return PLANS.find(p=>p.obsId===obsId); }
 
 function nextRoundIdSeq(){
   const yr = TODAY.getFullYear();
-  const nums = ROUNDS.filter(r=>r.id.startsWith('PSR-'+yr)).map(r=>parseInt(r.id.split('-')[2],10));
+  const nums = ROUNDS.filter(r=>String(r.id ?? '').startsWith('PSR-'+yr)).map(r=>parseInt(r.id.split('-')[2],10));
   const n = (nums.length? Math.max(...nums):0)+1;
   return `PSR-${yr}-${String(n).padStart(3,'0')}`;
 }
 function nextObsIdSeq(){
   const yr = TODAY.getFullYear();
-  const nums = OBSERVATIONS.filter(o=>o.id.startsWith('PSR-OBS-'+yr)).map(o=>parseInt(o.id.split('-')[3],10));
+  const nums = OBSERVATIONS.filter(o=>String(o.id ?? '').startsWith('PSR-OBS-'+yr)).map(o=>parseInt(o.id.split('-')[3],10));
   const n = (nums.length? Math.max(...nums):0)+1;
   return `PSR-OBS-${yr}-${String(n).padStart(3,'0')}`;
 }
 function nextPlanIdSeq(){
   const yr = TODAY.getFullYear();
-  const nums = PLANS.filter(p=>p.id.startsWith('PSR-CAP-'+yr)).map(p=>parseInt(p.id.split('-')[3],10));
+  const nums = PLANS.filter(p=>String(p.id ?? '').startsWith('PSR-CAP-'+yr)).map(p=>parseInt(p.id.split('-')[3],10));
   const n = (nums.length? Math.max(...nums):0)+1;
   return `PSR-CAP-${yr}-${String(n).padStart(3,'0')}`;
 }
@@ -1403,8 +1403,8 @@ function deadlineBadge(targetISO, status){ const i=deadlineInfo(targetISO,status
 
 /* ================= DASHBOARD ================= */
 function viewDashboard(){
-  const totalRounds = ROUNDS.filter(r=>r.id.startsWith('PSR-2026')).length;
-  const completed = ROUNDS.filter(r=>r.status==='Completed' && r.id.startsWith('PSR-2026')).length;
+  const totalRounds = ROUNDS.filter(r=>String(r.id ?? '').startsWith('PSR-2026')).length;
+  const completed = ROUNDS.filter(r=>r.status==='Completed' && String(r.id ?? '').startsWith('PSR-2026')).length;
   const upcoming = ROUNDS.filter(r=>r.status==='Scheduled' && ['Upcoming','DueSoon'].includes(roundStatusComputed(r))).length;
   const missed = ROUNDS.filter(r=>roundStatusComputed(r)==='Missed').length;
   const needsConfirmation = ROUNDS.filter(r=>roundStatusComputed(r)==='RequiresConfirmation').length;
@@ -1884,7 +1884,7 @@ function roundRunTab(r){
   </div>
   <div class="card">
     <div class="card-head"><h3>${STATE.lang==='ar'?'تقييم بنود التدقيق':'Checklist Assessment'}</h3>
-      <button type="button" class="btn btn-primary btn-sm" onclick="event.preventDefault(); event.stopPropagation(); openObsForm('${r.id}'); return false;">＋ ${STATE.lang==='ar'?'إضافة ملاحظة':'Add Observation'}</button>
+      <button class="btn btn-primary btn-sm" onclick="openObsForm('${r.id}')">＋ ${STATE.lang==='ar'?'إضافة ملاحظة':'Add Observation'}</button>
     </div>
     <div class="card-pad">
       ${DOMAINS.filter(d=>r.depts.some(dep=>domainApplies(d,dep))).map(d=>`
@@ -1899,7 +1899,7 @@ function roundRunTab(r){
             </div>
             <div class="ci-opts">
               <button class="ci-opt sel-compliant ${!existing?'active':''}" disabled>${STATE.lang==='ar'?'مطابق':'Compliant'}</button>
-              <button type="button" class="ci-opt sel-noncompliant ${existing?'active':''}" onclick="event.preventDefault(); event.stopPropagation(); openObsForm('${r.id}','${dep}','${d.id}','${i.id}'); return false;">${STATE.lang==='ar'?'غير مطابق / جزئي':'Non-Compliant / Partial — Add Finding'}</button>
+              <button class="ci-opt sel-noncompliant ${existing?'active':''}" onclick="openObsForm('${r.id}','${dep}','${d.id}','${i.id}')">${STATE.lang==='ar'?'غير مطابق / جزئي':'Non-Compliant / Partial — Add Finding'}</button>
             </div>
           </div>`;
         }).join('')}
@@ -1916,7 +1916,7 @@ function roundFindingsTab(r){
   const obs = OBSERVATIONS.filter(o=>o.roundId===r.id);
   return `<div class="card">
     <div class="card-head"><h3>${STATE.lang==='ar'?'ملاحظات الجولة':'Round Observations'}</h3>
-    ${r.status!=='Completed' && r.status!=='Missed'?`<button type="button" class="btn btn-primary btn-sm" onclick="event.preventDefault(); event.stopPropagation(); openObsForm('${r.id}'); return false;">＋ ${STATE.lang==='ar'?'إضافة ملاحظة':'Add Observation'}</button>`:''}</div>
+    ${r.status!=='Completed' && r.status!=='Missed'?`<button class="btn btn-primary btn-sm" onclick="openObsForm('${r.id}')">＋ ${STATE.lang==='ar'?'إضافة ملاحظة':'Add Observation'}</button>`:''}</div>
     ${obs.length? `<div class="table-wrap"><table><thead><tr><th>ID</th><th>${STATE.lang==='ar'?'القسم':'Dept'}</th><th>${STATE.lang==='ar'?'المجال':'Domain'}</th><th>${STATE.lang==='ar'?'الخطورة':'Risk'}</th><th>${STATE.lang==='ar'?'خطة التحسين':'Plan'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th></tr></thead><tbody>
     ${obs.map(o=>{ const p=planForObs(o.id); return `<tr>
       <td class="tbl-link" onclick="go('obs-detail',{id:'${o.id}'})">${o.id}</td>
@@ -2019,16 +2019,10 @@ function completeRound(id){
 
 /* ---------- Observation form (modal) ---------- */
 function openObsForm(roundId, dept, domainId, itemId){
-  try {
   const r = roundById(roundId);
-  if(!r){ toast(STATE.lang==='ar'?'تعذر العثور على الجولة':'Round not found'); return; }
-  const depts = Array.isArray(r.depts) && r.depts.length ? r.depts : (r.dept ? [r.dept] : []);
-  if(!depts.length){ toast(STATE.lang==='ar'?'لا يوجد قسم مرتبط بهذه الجولة':'No department is linked to this round'); return; }
+  const depts = r.depts;
   const id = nextObsIdSeq();
-  const domainsOpts = DOMAINS.filter(d=>depts.some(dep=>domainApplies(d,dep)) && Array.isArray(d.items) && d.items.length);
-  if(!domainsOpts.length){ toast(STATE.lang==='ar'?'لا توجد بنود تدقيق متاحة لهذا القسم':'No checklist items are available for this department'); return; }
-  if(!domainId || !domainsOpts.some(d=>d.id===domainId)) domainId = domainsOpts[0].id;
-  if(!dept || !depts.includes(dept)) dept = depts[0];
+  const domainsOpts = DOMAINS.filter(d=>depts.some(dep=>domainApplies(d,dep)));
   openModal(
     `${STATE.lang==='ar'?'إضافة ملاحظة سلامة مرضى':'Add Patient Safety Observation'} — <span style="color:var(--teal-700)">${id}</span>`,
     `
@@ -2062,15 +2056,12 @@ function openObsForm(roundId, dept, domainId, itemId){
      <button class="btn btn-primary" onclick="submitObservation('${roundId}','${id}')">${STATE.lang==='ar'?'حفظ الملاحظة':'Save Observation'}</button>`
   );
   refreshObsItemOptions(itemId);
-  } catch(err) { console.error('openObsForm failed', err); toast((STATE.lang==='ar'?'تعذر فتح نموذج الملاحظة: ':'Unable to open observation form: ')+(err?.message||err)); }
 }
 function refreshObsItemOptions(preselectId){
   const domId = document.getElementById('of-domain').value;
   const domain = DOMAINS.find(d=>d.id===domId);
   const sel = document.getElementById('of-item');
-  if(!sel) return;
-  const items = Array.isArray(domain?.items) ? domain.items : [];
-  sel.innerHTML = items.map(i=>`<option value="${i.id}" ${i.id===preselectId?'selected':''}>${STATE.lang==='ar'?i.ar:i.en}</option>`).join('');
+  sel.innerHTML = domain.items.map(i=>`<option value="${i.id}" ${i.id===preselectId?'selected':''}>${STATE.lang==='ar'?i.ar:i.en}</option>`).join('');
 }
 function submitObservation(roundId, id){
   const text = document.getElementById('of-text').value.trim();
@@ -2958,7 +2949,7 @@ function viewNotificationCenter(){
 /* ================= LEADERSHIP ================= */
 function viewLeadership(){
   const compliance = overallCompliance();
-  const totalRoundsAll = ROUNDS.filter(r=>r.id.startsWith('PSR-2026')).length;
+  const totalRoundsAll = ROUNDS.filter(r=>String(r.id ?? '').startsWith('PSR-2026')).length;
   const completed = ROUNDS.filter(r=>r.status==='Completed').length;
   const upcoming = ROUNDS.filter(r=>r.status==='Scheduled' && ['Upcoming','DueSoon'].includes(roundStatusComputed(r))).length;
   const missed = ROUNDS.filter(r=>roundStatusComputed(r)==='Missed').length;
