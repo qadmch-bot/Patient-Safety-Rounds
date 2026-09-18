@@ -29,6 +29,16 @@ async function attachSignedUrls(plan, evidence) {
   }
 }
 
+async function recordPlanActivity(planId, completed=false) {
+  const now = new Date().toISOString();
+  const rows = await sbGet("secure_link_activity", `?link_type=eq.plan&entity_id=eq.${encodeURIComponent(String(planId))}&recipient_phone=is.null&order=id.asc&limit=1`);
+  if (rows.length) {
+    await sbPatch("secure_link_activity", `?id=eq.${rows[0].id}`, { last_opened_at:now, open_count:(rows[0].open_count||1)+1, ...(completed?{action_completed_at:now}:{}) }, "minimal");
+  } else {
+    await sbInsert("secure_link_activity", [{ link_type:"plan", entity_id:String(planId), first_opened_at:now, last_opened_at:now, open_count:1, action_completed_at:completed?now:null }], "minimal");
+  }
+}
+
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -58,6 +68,11 @@ export default async function handler(req, res) {
       const plans = await sbGet("improvement_plans", `?secure_token=eq.${encodeURIComponent(b.token)}`);
       if (!plans.length) return res.status(404).json({ success: false, error: "Plan link not found or expired." });
       const plan = plans[0];
+
+      if (b.action === "link_open") {
+        await recordPlanActivity(plan.id, false);
+        return res.status(200).json({ success:true });
+      }
 
       if (b.action === "upload_plan") {
         if (!b.file_name || !b.file_base64) return res.status(400).json({ success: false, error: "file_name and file_base64 are required." });
@@ -105,17 +120,23 @@ export default async function handler(req, res) {
       }
 
       if (b.action === "submit") {
-        if (!plan.plan_storage_path) {
-          return res.status(400).json({ success: false, error: "Upload the completed improvement plan form before submitting." });
+        if (!String(b.corrective_action || "").trim()) {
+          return res.status(400).json({ success:false, error:"corrective_action is required." });
         }
         const patch = {
           status: "Plan Submitted",
           plan_comment: b.comment || plan.plan_comment || null,
+          root_cause: b.root_cause || null,
+          corrective_action: String(b.corrective_action).trim(),
+          preventive_action: b.preventive_action || null,
+          department_responsible_person: b.department_responsible_person || null,
+          department_submitted_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
         const updated = await sbPatch("improvement_plans", `?id=eq.${encodeURIComponent(plan.id)}`, patch);
         const result = updated[0];
-        result.plan_file_url = await getSignedUrl(BUCKETS.PLANS, result.plan_storage_path);
+        result.plan_file_url = result.plan_storage_path ? await getSignedUrl(BUCKETS.PLANS, result.plan_storage_path) : null;
+        await recordPlanActivity(plan.id, true);
         await logAudit({ action: "Plan Submitted for QPS Review", entity_type: "plan", entity_id: plan.id, actor: b.uploaded_by || "Department" });
         return res.status(200).json({ success: true, plan: result });
       }

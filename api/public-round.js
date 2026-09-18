@@ -1,4 +1,4 @@
-import { sbGet, sbInsert, setCors, handleConfigError } from "../lib/supabase.js";
+import { sbGet, sbInsert, sbPatch, setCors, handleConfigError } from "../lib/supabase.js";
 
 // GET  /api/public-round?token=xxxx
 //   -> { round, participants } for the secure, no-login round page.
@@ -12,6 +12,18 @@ import { sbGet, sbInsert, setCors, handleConfigError } from "../lib/supabase.js"
 // api/rounds.js). The member identifies themselves from the list of people
 // actually linked to this round (round_participants), so member name/role
 // are recorded automatically once they pick themselves — never freeform.
+
+async function recordRoundActivity(roundId, member, completed=false) {
+  const phone = member?.mobile || null;
+  const now = new Date().toISOString();
+  const q = `?link_type=eq.round&entity_id=eq.${encodeURIComponent(roundId)}&recipient_phone=${phone?`eq.${encodeURIComponent(phone)}`:'is.null'}`;
+  const rows = await sbGet("secure_link_activity", q);
+  if (rows.length) {
+    await sbPatch("secure_link_activity", `?id=eq.${rows[0].id}`, { last_opened_at: now, open_count: (rows[0].open_count||1)+1, ...(completed?{action_completed_at:now}:{}) }, "minimal");
+  } else {
+    await sbInsert("secure_link_activity", [{ link_type:"round", entity_id:roundId, recipient_name:member?.full_name||null, recipient_phone:phone, first_opened_at:now, last_opened_at:now, open_count:1, action_completed_at:completed?now:null }], "minimal");
+  }
+}
 
 export default async function handler(req, res) {
   setCors(res);
@@ -28,7 +40,7 @@ export default async function handler(req, res) {
 
       const participants = await sbGet(
         "round_participants",
-        `?round_id=eq.${encodeURIComponent(round.id)}&select=member_id,round_members(id,full_name,job_title,department)`
+        `?round_id=eq.${encodeURIComponent(round.id)}&select=member_id,round_members(id,full_name,job_title,department,mobile)`
       );
 
       return res.status(200).json({
@@ -52,6 +64,11 @@ export default async function handler(req, res) {
       if (!members.length) return res.status(404).json({ success: false, error: "Member not recognized for this round." });
       const member = members[0];
 
+      if (b.action === "link_open") {
+        await recordRoundActivity(round.id, member, false);
+        return res.status(200).json({ success: true });
+      }
+
       const row = {
         round_id: round.id,
         member_name: member.full_name,
@@ -68,6 +85,7 @@ export default async function handler(req, res) {
         submitted_at: new Date().toISOString(),
       };
       const inserted = await sbInsert("observations", [row]);
+      await recordRoundActivity(round.id, member, true);
       return res.status(200).json({ success: true, observation: inserted[0] });
     }
 

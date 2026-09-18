@@ -12,7 +12,7 @@
   "crons": [
     {
       "path": "/api/process-reminders?type=round",
-      "schedule": "0 5 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/api/process-reminders?type=plan",

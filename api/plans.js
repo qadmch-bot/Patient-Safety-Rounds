@@ -18,8 +18,7 @@ import { getSignedUrl, BUCKETS } from "../lib/storage.js";
 // IMPORTANT: uploading a plan never closes a finding by itself (enforced
 // in api/public-plan.js, which only ever sets "Plan Submitted"). Only this
 // endpoint, driven by an explicit Quality action, can close a finding — and
-// 'close' itself is refused unless the plan form is uploaded, evidence has
-// been reviewed and effectiveness has been confirmed.
+// 'close' itself is refused unless evidence has been reviewed and effectiveness has been confirmed.
 
 async function notifyResponsible(plan, finding, kind) {
   if (!finding.responsible_member_id) {
@@ -152,7 +151,6 @@ export default async function handler(req, res) {
 
     if (action === "close") {
       const missing = [];
-      if (!plan.plan_storage_path) missing.push("The completed approved improvement plan form has not been uploaded.");
       if (!plan.evidence_reviewed) missing.push("Evidence has not been marked as reviewed.");
       if (!plan.effectiveness_confirmed) missing.push("Effectiveness has not been confirmed.");
       if (!["Effective", "Partially Effective"].includes(plan.verification_result)) missing.push("Effectiveness verification result must be Effective or Partially Effective.");
