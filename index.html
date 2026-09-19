@@ -892,8 +892,8 @@ const STATE = {
 /* ---------------------------- UTILITIES ---------------------------- */
 function fmtISO(d){ const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; }
 function fmtDateTime(d){ return fmtISO(d)+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
-function parseD(s){ const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); }
-function fmtDate(s){ if(!s) return '—'; const d=parseD(s); const months=STATE.lang==='ar'
+function parseD(s){ if(typeof s!=='string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null; const [y,m,d]=s.split('-').map(Number); const date=new Date(y,m-1,d); return Number.isNaN(date.getTime())?null:date; }
+function fmtDate(s){ if(!s) return '—'; const d=parseD(s); if(!d) return '—'; const months=STATE.lang==='ar'
   ? ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر']
   : ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`; }
@@ -4220,7 +4220,10 @@ async function bootPublicPlan(){
 function renderPublicPlan(){
   const { plan, finding, evidence } = PUBLIC_PLAN_STATE;
   const content = document.getElementById('content');
-  const days = Math.round((parseD(plan.due_date) - parseD(todayStr())) / 86400000);
+  if(!plan){ content.innerHTML='<div class="card card-pad">بيانات الخطة غير متاحة. يرجى التواصل مع إدارة الجودة.</div>'; return; }
+  if(!finding){ content.innerHTML='<div class="card card-pad">تعذّر العثور على الملاحظة المرتبطة بالخطة. يرجى التواصل مع إدارة الجودة.</div>'; return; }
+  const dueDate=parseD(plan.due_date);
+  const days=dueDate?Math.round((dueDate - parseD(todayStr())) / 86400000):null;
   content.innerHTML = `
   <div style="max-width:760px;margin:24px auto;padding:0 16px;">
     ${publicLanguageSwitchHtml()}
@@ -4229,13 +4232,14 @@ function renderPublicPlan(){
     <div class="card" style="margin-bottom:16px;">
       <div class="card-head"><h3>${STATE.lang==='ar'?'الملاحظة المعتمدة':'Approved Finding'}</h3></div>
       <div class="card-pad">
+        <div class="field"><label>${STATE.lang==='ar'?'الملاحظة':'Observation'}</label><div>${esc(finding.observation_text||finding.checklist_item||'—')}</div></div>
         <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><div>${domainName(finding.domain)}</div></div>
         <div class="field"><label>${STATE.lang==='ar'?'مستوى الخطورة':'Risk Level'}</label><div>${riskBadge(finding.risk_level)}</div></div>
         <div class="field-row">
           <div class="field"><label>${STATE.lang==='ar'?'تاريخ البدء':'Start Date'}</label><div>${fmtDate(plan.start_date)}</div></div>
           <div class="field"><label>${STATE.lang==='ar'?'الموعد النهائي':'Due Date'}</label><div>${fmtDate(plan.due_date)}</div></div>
         </div>
-        <div class="field"><label>${STATE.lang==='ar'?'الأيام المتبقية':'Days Remaining'}</label><div>${days>=0?days:(STATE.lang==='ar'?`متأخرة ${Math.abs(days)} يوم`:`${Math.abs(days)} day(s) overdue`)}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'الأيام المتبقية':'Days Remaining'}</label><div>${days===null?(STATE.lang==='ar'?'لم تحدد الجودة موعدًا نهائيًا لهذه الخطة':'No due date has been set by Quality'):days>=0?days:(STATE.lang==='ar'?`متأخرة ${Math.abs(days)} يوم`:`${Math.abs(days)} day(s) overdue`)}</div></div>
       </div>
     </div>
     <div class="card" style="margin-bottom:16px;">
@@ -4475,6 +4479,7 @@ async function viewPlanLiveDetailAsync(id){
     <div class="card-pad">
       <div class="field-row">
         <div class="field"><label>${STATE.lang==='ar'?'القسم':'Department'}</label><div>${deptName(finding.department)}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'الملاحظة':'Observation'}</label><div>${esc(finding.observation_text||finding.checklist_item||'—')}</div></div>
         <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><div>${domainName(finding.domain)}</div></div>
       </div>
       <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><div>${esc(finding.checklist_item||'—')}</div></div>
