@@ -62,6 +62,7 @@ export default async function handler(req, res) {
       }
 
       // decision === 'approve'
+      if (b.corrective_required && (!/^\d{4}-\d{2}-\d{2}$/.test(b.due_date || "") || b.due_date < new Date().toISOString().slice(0,10))) return res.status(400).json({success:false,error:"A valid due_date is required before approving a corrective plan."});
       if (!b.risk_level) return res.status(400).json({ success: false, error: "risk_level is required to approve." });
       const patch = {
         status: "Approved",
@@ -111,7 +112,8 @@ export default async function handler(req, res) {
         const planRow = {
           finding_id: finding.id,
           start_date: startDate,
-          due_date: dueDate,
+          due_date: b.due_date,
+          due_date_is_manual: true,
           status: "Plan Requested",
           secure_token: randomToken(),
         };
@@ -130,7 +132,7 @@ export default async function handler(req, res) {
               roundId: obs.round_id,
               findingSummary: obs.observation_text,
               startDate,
-              dueDate,
+              dueDate: b.due_date,
               link,
             });
             whatsappResult = await sendWhatsAppNow({

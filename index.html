@@ -4094,7 +4094,7 @@ async function bootPublicRound(){
   try{
     const res = await fetch('/api/public-round?token='+encodeURIComponent(publicToken()));
     const data = await res.json();
-    if(!res.ok || !data.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(data.error||(STATE.lang==='ar'?'الرابط غير صالح أو منتهي.':'This link is invalid or has expired.'))}</b></div>`; return; }
+    if(!res.ok || !data.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(data.error||(STATE.lang==='ar'?'الرابط غير صالح أو منتهي.':'This link is invalid or has expired.'))}</b><button class="btn btn-primary" onclick="bootPublicPlan()">${STATE.lang==='ar'?'إعادة المحاولة':'Retry'}</button></div>`; return; }
     PUBLIC_ROUND_STATE.round = data.round;
     PUBLIC_ROUND_STATE.participants = data.participants;
     const perDept = await Promise.all(data.round.departments.map(d=>fetchPreviousFindings(d, data.round.id)));
@@ -4209,12 +4209,12 @@ async function bootPublicPlan(){
   try{
     const res = await fetch('/api/public-plan?token='+encodeURIComponent(publicToken()));
     const data = await res.json();
-    if(!res.ok || !data.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(data.error||(STATE.lang==='ar'?'الرابط غير صالح أو منتهي.':'This link is invalid or has expired.'))}</b></div>`; return; }
+    if(!res.ok || !data.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(data.error||(STATE.lang==='ar'?'الرابط غير صالح أو منتهي.':'This link is invalid or has expired.'))}</b><button class="btn btn-primary" onclick="bootPublicPlan()">${STATE.lang==='ar'?'إعادة المحاولة':'Retry'}</button></div>`; return; }
     PUBLIC_PLAN_STATE.plan = data.plan; PUBLIC_PLAN_STATE.finding = data.finding; PUBLIC_PLAN_STATE.evidence = data.evidence || [];
     try{ await fetch('/api/public-plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:publicToken(),action:'link_open'})}); }catch(e){}
     renderPublicPlan();
   } catch(error){
-    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل بيانات الخطة':'Could not load this plan'}</b></div>`;
+    content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل بيانات الخطة':'Could not load this plan'}</b><p>${esc(error.message||'Network error')}</p><button class="btn btn-primary" onclick="bootPublicPlan()">${STATE.lang==='ar'?'إعادة المحاولة':'Retry'}</button></div>`;
   }
 }
 function renderPublicPlan(){
@@ -4351,6 +4351,7 @@ function openApproveObsModal(id){
      <div class="field"><label>${STATE.lang==='ar'?'العضو المسؤول (لإرسال واتساب فعلي)':'Responsible Member (for real WhatsApp)'}</label>
        <select id="qa-member"><option value="">${STATE.lang==='ar'?'بدون — لن يُرسل واتساب':'None — no WhatsApp will be sent'}</option>${ROUND_MEMBERS.map(m=>`<option value="${m.id}">${esc(m.full_name)}${m.mobile?' 📱':' (no mobile)'}</option>`).join('')}</select></div>
      <div class="field"><label><input type="checkbox" id="qa-corrective" checked> ${STATE.lang==='ar'?'مطلوبة خطة تصحيحية':'Corrective Plan Required'}</label></div>
+     <div class="field"><label>${STATE.lang==='ar'?'الموعد النهائي للخطة التصحيحية':'Corrective plan due date'} <span class="req">*</span></label><input type="date" id="qa-due-date" min="${todayStr()}"><small>${STATE.lang==='ar'?'يُحدد بواسطة الجودة قبل إرسال الرابط':'Set by Quality before sending the link'}</small></div>
      <div class="field"><label>${STATE.lang==='ar'?'ملاحظات':'Notes'}</label><textarea id="qa-notes"></textarea></div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button>
      <button class="btn btn-primary" onclick="decideObservation('${id}','approve')">${STATE.lang==='ar'?'اعتماد':'Approve'}</button>`
@@ -4377,6 +4378,8 @@ async function decideObservation(id, decision){
     payload.responsible_person = document.getElementById('qa-person').value;
     payload.responsible_member_id = document.getElementById('qa-member').value || null;
     payload.corrective_required = document.getElementById('qa-corrective').checked;
+    payload.due_date = document.getElementById('qa-due-date').value;
+    if(payload.corrective_required && (!payload.due_date || payload.due_date < todayStr())){ toast(STATE.lang==='ar'?'حددي موعدًا نهائيًا صالحًا للخطة قبل الاعتماد':'Choose a valid plan due date before approval'); return; }
   }
   try{
     const res = await fetch('/api/observations?id='+encodeURIComponent(id), { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
@@ -4394,7 +4397,7 @@ async function decideObservation(id, decision){
       toast(msg);
       // Always offer the wa.me fallback too (works even if Twilio isn't configured),
       // so Quality can send the corrective-plan request themselves in one click.
-      if(data.plan && payload.responsible_member_id){
+      if(data.plan && payload.responsible_member_id && !(data.whatsapp && data.whatsapp.success)){
         const member = ROUND_MEMBERS.find(m=>String(m.id)===String(payload.responsible_member_id));
         if(member && member.mobile){
           const link = window.location.origin + '/plan/' + data.plan.secure_token;
