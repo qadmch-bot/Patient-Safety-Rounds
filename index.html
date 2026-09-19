@@ -4277,7 +4277,7 @@ function renderPublicPlan(){
       <div class="card-pad">
         ${plan.plan_file_url?`<div class="side-note">📎 ${esc(plan.plan_file_name||'ملف الخطة التصحيحية')} <a class="btn btn-ghost btn-sm" href="${esc(plan.plan_file_url)}" target="_blank" rel="noopener">${STATE.lang==='ar'?'فتح الملف':'Open file'}</a></div>`:`<div class="muted">${STATE.lang==='ar'?'لم يرفع القسم ملف الخطة بعد؛ يرجى اختيار الملف ورفعه أدناه.':'No plan file uploaded yet; select and upload it below.'}</div>`}
         <div class="field" style="margin-top:12px;"><label for="pp-plan-file">${STATE.lang==='ar'?'اختيار ملف الخطة (PDF أو Word أو صورة)':'Choose plan file (PDF, Word or image)'}</label><input type="file" id="pp-plan-file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"></div>
-        <button class="btn btn-primary btn-sm" onclick="uploadPublicPlan()">${STATE.lang==='ar'?'رفع ملف الخطة التصحيحية':'Upload corrective plan file'}</button>
+        <button class="btn btn-primary btn-sm" id="pp-upload-plan-btn" onclick="uploadPublicPlan()">${STATE.lang==='ar'?'رفع ملف الخطة التصحيحية':'Upload corrective plan file'}</button>
       </div>
     </div>
     <div class="card" style="margin-bottom:16px;">
@@ -4285,56 +4285,84 @@ function renderPublicPlan(){
       <div class="card-pad">
         ${evidence.length? evidence.map(e=>`<div style="padding:6px 0;">📎 ${esc(e.file_name)} — <a href="${e.file_url}" download="${esc(e.file_name)}">${STATE.lang==='ar'?'تنزيل':'Download'}</a></div>`).join('') : `<div class="muted">${STATE.lang==='ar'?'لا توجد أدلة مرفوعة بعد':'No evidence uploaded yet'}</div>`}
         <div class="field" style="margin-top:10px;"><input type="file" id="pp-evidence-file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"></div>
-        <button class="btn btn-ghost btn-sm" onclick="uploadPublicEvidence()">+ ${STATE.lang==='ar'?'إضافة دليل':'Add Evidence'}</button>
+        <button class="btn btn-ghost btn-sm" id="pp-upload-evidence-btn" onclick="uploadPublicEvidence()">+ ${STATE.lang==='ar'?'إضافة دليل':'Add Evidence'}</button>
       </div>
     </div>
     <div class="card">
       <div class="card-head"><h3>${STATE.lang==='ar'?'تعليق':'Comment'}</h3></div>
       <div class="card-pad">
         <textarea id="pp-comment" placeholder="${STATE.lang==='ar'?'تعليق اختياري قبل الإرسال...':'Optional comment before submitting…'}">${esc(plan.plan_comment||'')}</textarea>
-        <button class="btn btn-primary" style="margin-top:10px;" onclick="submitPublicPlan()">${STATE.lang==='ar'?'إرسال للجودة':'Submit for QPS Review'}</button>
+        <button class="btn btn-primary" style="margin-top:10px;" id="pp-submit-btn" onclick="submitPublicPlan()">${STATE.lang==='ar'?'إرسال للجودة':'Submit for QPS Review'}</button>
       </div>
     </div>
   </div>`;
 }
-async function uploadPublicPlan(){
-  const f = document.getElementById('pp-plan-file').files[0];
-  if(!f){ toast(STATE.lang==='ar'?'اختر ملفًا':'Choose a file'); return; }
-  const name = 'Department';
-  const b64 = await fileToBase64(f);
-  const res = await fetch('/api/public-plan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:publicToken(), action:'upload_plan', uploaded_by:name, file_name:f.name, file_type:f.type, file_base64:b64})});
-  const data = await res.json();
-  if(!res.ok || !data.success){ toast(data.error||'Upload failed'); return; }
-  Object.assign(PUBLIC_PLAN_STATE.plan, data.plan);
-  toast(STATE.lang==='ar'?'تم رفع الخطة':'Plan uploaded');
-  renderPublicPlan();
+// Confirm each upload by re-reading the persisted database record and signed URL.
+let PUBLIC_UPLOAD_BUSY = false;
+function publicUploadBusy(busy){
+  PUBLIC_UPLOAD_BUSY=busy;
+  ['pp-upload-plan-btn','pp-upload-evidence-btn','pp-submit-btn'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.disabled=busy;
+  });
 }
-async function uploadPublicEvidence(){
-  const f = document.getElementById('pp-evidence-file').files[0];
-  if(!f){ toast(STATE.lang==='ar'?'اختر ملفًا':'Choose a file'); return; }
-  const name = 'Department';
-  const b64 = await fileToBase64(f);
-  const res = await fetch('/api/public-plan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:publicToken(), action:'upload_evidence', uploaded_by:name, file_name:f.name, file_type:f.type, file_base64:b64})});
-  const data = await res.json();
-  if(!res.ok || !data.success){ toast(data.error||'Upload failed'); return; }
-  PUBLIC_PLAN_STATE.evidence.unshift(data.evidence);
-  toast(STATE.lang==='ar'?'تم رفع الدليل':'Evidence uploaded');
-  renderPublicPlan();
+async function publicPlanRequest(body){
+  const response=await fetch('/api/public-plan',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:publicToken(),...body})
+  });
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok||!data.success) throw new Error(data.error||`Request failed (${response.status})`);
+  return data;
 }
+async function refreshPublicPlanFromServer(){
+  const response=await fetch('/api/public-plan?token='+encodeURIComponent(publicToken()),{cache:'no-store'});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok||!data.success||!data.plan) throw new Error(data.error||'Could not verify uploaded files');
+  PUBLIC_PLAN_STATE={plan:data.plan,finding:data.finding,evidence:data.evidence||[]};
+  return data;
+}
+async function uploadPublicFile(kind){
+  if(PUBLIC_UPLOAD_BUSY) return;
+  const file=document.getElementById(kind==='plan'?'pp-plan-file':'pp-evidence-file')?.files?.[0];
+  if(!file){toast('يرجى اختيار ملف أولاً');return;}
+  if(!/\.(pdf|doc|docx|jpg|jpeg|png)$/i.test(file.name)){toast('نوع الملف غير مدعوم');return;}
+  // Base64 expands the request; keep below the configured Vercel request-body limit.
+  if(file.size>2.5*1024*1024){toast('الملف كبير للرفع بهذه الطريقة. اختاري ملفًا أصغر من 2.5 MB أو فعّلي الرفع المباشر للتخزين.');return;}
+  publicUploadBusy(true);
+  try{
+    const before=new Set(PUBLIC_PLAN_STATE.evidence.map(e=>String(e.id)));
+    const encoded=await fileToBase64(file);
+    const data=await publicPlanRequest({action:kind==='plan'?'upload_plan':'upload_evidence',uploaded_by:'Department',file_name:file.name,file_type:file.type||'application/octet-stream',file_base64:encoded});
+    const fresh=await refreshPublicPlanFromServer();
+    if(kind==='plan'){
+      if(!fresh.plan.plan_storage_path||!fresh.plan.plan_file_url||fresh.plan.plan_file_name!==file.name) throw new Error('لم يتم التحقق من حفظ ملف الخطة في التخزين');
+    }else{
+      const saved=fresh.evidence.find(e=>String(e.id)===String(data.evidence?.id)&&!before.has(String(e.id))&&e.storage_path&&e.file_url);
+      if(!saved) throw new Error('لم يتم التحقق من حفظ الدليل في التخزين');
+    }
+    toast(kind==='plan'?'تم حفظ ملف الخطة والتحقق منه':'تم حفظ الدليل والتحقق منه');
+  }catch(error){console.error('Verified file upload failed:',error);toast('فشل رفع الملف أو التحقق منه: '+error.message);}
+  finally{publicUploadBusy(false);renderPublicPlan();}
+}
+async function uploadPublicPlan(){return uploadPublicFile('plan');}
+async function uploadPublicEvidence(){return uploadPublicFile('evidence');}
 async function submitPublicPlan(){
-  const name = 'Department';
-  const comment = document.getElementById('pp-comment').value;
+  if(PUBLIC_UPLOAD_BUSY) return;
+  const comment=document.getElementById('pp-comment').value;
   const root_cause=document.getElementById('pp-root-cause').value.trim();
   const corrective_action=document.getElementById('pp-corrective-action').value.trim();
   const preventive_action=document.getElementById('pp-preventive-action').value.trim();
   const department_responsible_person=document.getElementById('pp-responsible-person').value.trim();
-  if(!corrective_action){ toast(STATE.lang==='ar'?'اكتب الإجراء التصحيحي قبل الإرسال':'Enter the corrective action before submitting'); return; }
-  const res = await fetch('/api/public-plan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:publicToken(), action:'submit', uploaded_by:name, comment, root_cause, corrective_action, preventive_action, department_responsible_person})});
-  const data = await res.json();
-  if(!res.ok || !data.success){ toast(data.error||'Submit failed'); return; }
-  Object.assign(PUBLIC_PLAN_STATE.plan, data.plan);
-  toast(STATE.lang==='ar'?'تم الإرسال لمراجعة الجودة':'Submitted for QPS review');
-  renderPublicPlan();
+  if(!corrective_action){toast('اكتبي الإجراء التصحيحي قبل الإرسال');return;}
+  publicUploadBusy(true);
+  try{
+    const fresh=await refreshPublicPlanFromServer();
+    if(!fresh.plan.plan_storage_path||!fresh.plan.plan_file_url){throw new Error('يجب رفع ملف الخطة والتحقق منه قبل الإرسال');}
+    if(!fresh.evidence.some(e=>e.storage_path&&e.file_url)){throw new Error('يجب رفع دليل داعم واحد على الأقل قبل الإرسال');}
+    await publicPlanRequest({action:'submit',uploaded_by:'Department',comment,root_cause,corrective_action,preventive_action,department_responsible_person});
+    await refreshPublicPlanFromServer();
+    toast('تم إرسال الخطة لمراجعة الجودة');
+  }catch(error){console.error('Plan submission failed:',error);toast('تعذر إرسال الخطة: '+error.message);}
+  finally{publicUploadBusy(false);renderPublicPlan();}
 }
 
 /* ---------------- QPS Observation Review (internal, real data) ---------------- */
