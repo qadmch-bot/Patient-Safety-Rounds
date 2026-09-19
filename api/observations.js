@@ -123,9 +123,7 @@ export default async function handler(req, res) {
           const members = await sbGet("round_members", `?id=eq.${encodeURIComponent(b.responsible_member_id)}`);
           const member = members[0];
           if (member && member.mobile) {
-            const proto = req.headers["x-forwarded-proto"] || "https";
-            const host = req.headers.host || "patient-safety-rounds.vercel.app";
-            const link = `${proto}://${host}/plan/${plan.secure_token}`;
+            const link = `${(process.env.PUBLIC_BASE_URL || "https://patient-safety-rounds.vercel.app").replace(/\/$/, "")}/plan/${plan.secure_token}`;
             const message = planRequestMessage({
               lang: member.preferred_language || "ar",
               department: patch.responsible_department,

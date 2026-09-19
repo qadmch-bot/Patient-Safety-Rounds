@@ -9,10 +9,5 @@
       "destination": "/index.html"
     }
   ],
-  "crons": [
-    {
-      "path": "/api/process-reminders?type=plan",
-      "schedule": "0 8 * * *"
-    }
-  ]
+  "crons": []
 }

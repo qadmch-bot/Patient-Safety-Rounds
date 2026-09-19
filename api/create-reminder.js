@@ -54,9 +54,11 @@ Maternity & Children Hospital – Hafr Al Batin`;
 }
 
 function minutesBefore(dateStr, timeStr, minutes) {
-  const dt = new Date(`${dateStr}T${timeStr}:00`);
-  dt.setMinutes(dt.getMinutes() - minutes);
-  return dt.toISOString();
+  // Round times are entered in Saudi Arabia local time (UTC+03:00).
+  const time = String(timeStr || "").slice(0, 5);
+  const dt = new Date(`${dateStr}T${time}:00+03:00`);
+  if (!Number.isFinite(dt.getTime())) throw new Error("Invalid round date/time");
+  return new Date(dt.getTime() - minutes * 60000).toISOString();
 }
 
 export default async function handler(req, res) {
@@ -72,9 +74,11 @@ export default async function handler(req, res) {
     if (!roundRows.length) return res.status(404).json({ success: false, error: "Round not found." });
     const round = roundRows[0];
 
-    const proto = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || process.env.VERCEL_URL || "patient-safety-rounds.vercel.app";
-    round._link = `${proto}://${host}/round/${round.secure_token}`;
+    if (round.status !== "Scheduled" || !round.secure_token) return res.status(400).json({success:false,error:"Only scheduled rounds with a public token may be queued."});
+    const baseUrl = (process.env.PUBLIC_BASE_URL || "https://patient-safety-rounds.vercel.app").replace(/\/$/, "");
+    round._link = `${baseUrl}/round/${round.secure_token}`;
+    const roundStart = Date.parse(`${round.planned_date}T${String(round.planned_time).slice(0,5)}:00+03:00`);
+    if (!Number.isFinite(roundStart) || roundStart <= Date.now()) return res.status(400).json({success:false,error:"Past or invalid rounds cannot be queued."});
 
     const participants = await sbGet(
       "round_participants",
@@ -98,6 +102,8 @@ export default async function handler(req, res) {
         { type: "24h", minutes: 24 * 60 },
         { type: "1h", minutes: 60 },
       ].forEach(({ type, minutes }) => {
+        const scheduledAt = minutesBefore(round.planned_date, round.planned_time, minutes);
+        if (Date.parse(scheduledAt) <= Date.now()) return;
         rows.push({
           round_id: round.id,
           department: Array.isArray(round.departments) ? round.departments.join(" + ") : round.departments,
@@ -107,7 +113,7 @@ export default async function handler(req, res) {
           message: buildMessage(round, m, type),
           event_key: `${round.id}|${m.id}|${type}`,
           status: "pending",
-          scheduled_at: minutesBefore(round.planned_date, round.planned_time, minutes),
+          scheduled_at: scheduledAt,
         });
       });
     });

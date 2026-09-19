@@ -20,7 +20,7 @@ import { planReminderMessage } from "../lib/messages.js";
 
 export default async function handler(req, res) {
   const type = req.query.type === "plan" ? "plan" : "round";
-  if (type === "plan") return processPlanReminders(req, res);
+  if (type === "plan") return res.status(410).json({ success: false, error: "Automatic corrective-plan reminders are disabled. Send follow-ups manually from Quality administration." });
   return processRoundReminders(req, res);
 }
 
@@ -35,14 +35,27 @@ async function processRoundReminders(req, res) {
     return res.status(405).json({ success: false, error: "Method not allowed" });
   }
   try {
+    if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) return res.status(401).json({success:false,error:"Unauthorized"});
     const nowIso = new Date().toISOString();
     const dueRows = await sbGet(
       "whatsapp_reminders",
-      `?status=eq.pending&scheduled_at=lte.${encodeURIComponent(nowIso)}&order=scheduled_at.asc&limit=50`
+      `?status=eq.pending&reminder_type=in.(24h,1h)&scheduled_at=lte.${encodeURIComponent(nowIso)}&order=scheduled_at.asc&limit=50`
     );
 
     const results = [];
     for (const row of dueRows) {
+      // Never send stale reminders for historical rounds or reminders more than 15 minutes late.
+      const scheduled = Date.parse(row.scheduled_at);
+      if (!Number.isFinite(scheduled) || Date.now() - scheduled > 15 * 60 * 1000) {
+        await sbPatch("whatsapp_reminders", `?id=eq.${row.id}&status=eq.pending`, {status:"cancelled",error_message:"Expired reminder window"}, "minimal");
+        continue;
+      }
+      const rounds = await sbGet("rounds", `?id=eq.${encodeURIComponent(row.round_id)}`);
+      const round = rounds[0];
+      if (!round || round.status !== "Scheduled" || !round.secure_token) {
+        await sbPatch("whatsapp_reminders", `?id=eq.${row.id}&status=eq.pending`, {status:"cancelled",error_message:"Round not scheduled"}, "minimal");
+        continue;
+      }
       // Optimistic lock so two overlapping cron invocations can't double-send.
       const locked = await sbPatch(
         "whatsapp_reminders",

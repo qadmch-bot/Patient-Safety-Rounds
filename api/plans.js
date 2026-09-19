@@ -95,9 +95,7 @@ export default async function handler(req, res) {
     const findings = await sbGet("findings", `?id=eq.${encodeURIComponent(plan.finding_id)}`);
     const finding = findings[0];
 
-    const proto = req.headers["x-forwarded-proto"] || "https";
-    const host = req.headers.host || "patient-safety-rounds.vercel.app";
-    plan._baseUrl = `${proto}://${host}`;
+    plan._baseUrl = (process.env.PUBLIC_BASE_URL || "https://patient-safety-rounds.vercel.app").replace(/\/$/, "");
 
     if (action === "accept") {
       const updated = await sbPatch("improvement_plans", `?id=eq.${encodeURIComponent(id)}`, { status: "Plan Accepted", updated_at: new Date().toISOString() });
