@@ -211,7 +211,10 @@ tbody tr:last-child td{border-bottom:none;}
 .modal-head h3{font-size:16px;}
 .modal-x{background:none; border:none; font-size:18px; color:var(--ink-soft); width:28px; height:28px; border-radius:6px;}
 .modal-x:hover{background:var(--bg);}
-.modal-body{padding:18px 20px; max-height:70vh; overflow-y:auto;}
+.modal-body{padding:18px 20px; max-height:min(70vh, calc(100dvh - 170px)); overflow-y:auto; overscroll-behavior:contain;}
+#modal-layer .modal{max-height:calc(100dvh - 32px);display:flex;flex-direction:column;min-height:0;}
+#modal-layer .modal-body{flex:1;min-height:0;}
+#modal-layer select,#modal-layer input,#modal-layer textarea{max-width:100%;box-sizing:border-box;}
 .modal-foot{padding:14px 20px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:8px;}
 
 /* toast */
@@ -373,7 +376,25 @@ const DEPARTMENTS = [
  {id:'PEDIAOPD', en:'Pediatric Outpatient Clinic', ar:'عيادة الأطفال الخارجية'},
  {id:'PHARMACY', en:'Pharmacy', ar:'الصيدلية'},
 ];
-function deptName(id){ const d=DEPARTMENTS.find(x=>x.id===id); if(!d) return id; return STATE.lang==='ar'? d.ar : d.en; }
+// Additional responsible departments are managed by Quality and saved on this browser.
+// Existing departments and round scheduling remain unchanged.
+function loadExtraResponsibleDepartments(){
+ try { return JSON.parse(localStorage.getItem('psr_extra_responsible_departments')||'[]').filter(d=>d&&d.id&&d.ar); } catch(e){ return []; }
+}
+function responsibleDepartments(){return [...DEPARTMENTS,...loadExtraResponsibleDepartments()];}
+function addResponsibleDepartment(){
+ const input=document.getElementById('qa-new-dept');
+ const name=(input?.value||'').trim();
+ if(!name){toast('اكتبي اسم القسم');return;}
+ const existing=responsibleDepartments().find(d=>d.ar===name||d.en===name);
+ if(existing){document.getElementById('qa-dept').value=existing.id;return;}
+ const id='CUSTOM-'+Date.now();
+ const list=loadExtraResponsibleDepartments();list.push({id,ar:name,en:name});
+ try{localStorage.setItem('psr_extra_responsible_departments',JSON.stringify(list));}catch(e){toast('تعذر حفظ القسم');return;}
+ const select=document.getElementById('qa-dept');select.add(new Option(name,id));select.value=id;input.value='';
+ toast('تمت إضافة القسم إلى قائمة الأقسام المسؤولة');
+}
+function deptName(id){ const d=responsibleDepartments().find(x=>x.id===id); if(!d) return id; return STATE.lang==='ar'? d.ar : d.en; }
 
 const DOMAINS = [
  {id:'MEDADMIN', sn:8, en:'Medical Administration', ar:'الإدارة الطبية', scope:'ALL', desc_en:'Medical governance, physician practice, clinical coordination and related safety oversight.', desc_ar:'الحوكمة الطبية وممارسة الأطباء والتنسيق السريري والإشراف المرتبط بسلامة المرضى.', items:[]},
@@ -4358,7 +4379,7 @@ function openApproveObsModal(id){
   openModal(
     STATE.lang==='ar'?'اعتماد الملاحظة':'Approve Observation',
     `<div class="field"><label>${STATE.lang==='ar'?'مستوى الخطورة':'Risk Level'} <span class="req">*</span></label><select id="qa-risk">${RISKS.map(r=>`<option value="${r}">${riskLabel(r)}</option>`).join('')}</select></div>
-     <div class="field"><label>${STATE.lang==='ar'?'القسم المسؤول':'Responsible Department'}</label><select id="qa-dept">${DEPARTMENTS.map(d=>`<option value="${d.id}">${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select></div>
+     <div class="field"><label>${STATE.lang==='ar'?'القسم المسؤول':'Responsible Department'}</label><select id="qa-dept">${responsibleDepartments().map(d=>`<option value="${d.id}">${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select><div style="display:flex;gap:6px;margin-top:8px;"><input id="qa-new-dept" placeholder="إضافة قسم مسؤول جديد" style="flex:1;min-width:0;"><button type="button" class="btn btn-ghost btn-sm" onclick="addResponsibleDepartment()">+ إضافة</button></div></div>
      <div class="field"><label>${STATE.lang==='ar'?'الشخص المسؤول (نص)':'Responsible Person (text)'}</label><input id="qa-person" placeholder="e.g. Ward Charge Nurse"></div>
      <div class="field"><label>${STATE.lang==='ar'?'العضو المسؤول (لإرسال واتساب فعلي)':'Responsible Member (for real WhatsApp)'}</label>
        <select id="qa-member"><option value="">${STATE.lang==='ar'?'بدون — لن يُرسل واتساب':'None — no WhatsApp will be sent'}</option>${ROUND_MEMBERS.map(m=>`<option value="${m.id}">${esc(m.full_name)}${m.mobile?' 📱':' (no mobile)'}</option>`).join('')}</select></div>
@@ -4504,6 +4525,7 @@ async function viewPlanLiveDetailAsync(id){
         <div class="card-head"><h3>${STATE.lang==='ar'?'الخطة التصحيحية':'Corrective Plan'}</h3></div>
         <div class="card-pad">
           <div class="field-row"><div class="field"><label>${STATE.lang==='ar'?'البدء':'Start'}</label><div>${fmtDate(plan.start_date)}</div></div><div class="field"><label>${STATE.lang==='ar'?'الاستحقاق':'Due'}</label><div>${fmtDate(plan.due_date)}</div></div></div>
+          ${plan.plan_storage_path && !plan.plan_file_url?`<div class="esc-note">الملف محفوظ لكن تعذّر إنشاء رابط عرضه. راجعي إعدادات Supabase Storage.</div>`:''}
           ${plan.plan_file_url? `
             <div class="side-note" style="margin-bottom:8px;">
               <div style="font-weight:700;">📎 ${esc(plan.plan_file_name)}</div>
@@ -4518,6 +4540,7 @@ async function viewPlanLiveDetailAsync(id){
                 <a class="btn btn-ghost btn-sm" href="${plan.plan_file_url}" download="${esc(plan.plan_file_name)}">${STATE.lang==='ar'?'تنزيل':'Download'}</a>
               </div>
             </div>` : `<div class="esc-note">${STATE.lang==='ar'?'لم يتم رفع الخطة بعد':'Plan not uploaded yet'}</div>`}
+          ${plan.corrective_action?`<div class="field"><label>الإجراء التصحيحي المسجل</label><div>${esc(plan.corrective_action)}</div></div>`:''}
           ${plan.plan_comment? `<div class="field"><label>${STATE.lang==='ar'?'تعليق القسم':"Department's Comment"}</label><div>${esc(plan.plan_comment)}</div></div>`:''}
           ${plan.verification_result? `<div class="field"><label>${STATE.lang==='ar'?'نتيجة التحقق':'Verification Result'}</label><div>${esc(plan.verification_result)} ${plan.verified_by?'— '+esc(plan.verified_by):''} ${plan.verification_date?'· '+fmtDate(plan.verification_date):''}</div></div>`:''}
         </div>
