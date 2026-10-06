@@ -25,7 +25,28 @@ export default async function handler(req, res) {
       plans = await sbGet("improvement_plans", `?finding_id=in.(${findingIds.join(",")})`);
     }
     const byFinding = Object.fromEntries(plans.map((p) => [p.finding_id, p]));
-    const merged = findings.map((f) => ({ ...f, plan: byFinding[f.id] || null }));
+
+    // Attach the exact observation wording to every finding.  Reports and
+    // corrective-plan screens must never replace the real observation with a
+    // short checklist code such as QMPS-1.
+    const observationIds = [...new Set(findings.map(f => f.observation_id).filter(Boolean))];
+    let observations = [];
+    if (observationIds.length) {
+      observations = await sbGet("observations", `?id=in.(${observationIds.join(",")})`);
+    }
+    const byObservation = Object.fromEntries(observations.map(o => [String(o.id), o]));
+    const merged = findings.map((f) => {
+      const obs = byObservation[String(f.observation_id)] || null;
+      return {
+        ...f,
+        observation_text: obs?.observation_text || null,
+        observation_location: obs?.location || null,
+        immediate_action: obs?.immediate_action || null,
+        suggested_action: obs?.suggested_action || null,
+        observation_comments: obs?.comments || null,
+        plan: byFinding[f.id] || null
+      };
+    });
 
     return res.status(200).json({ success: true, findings: merged });
   } catch (error) {

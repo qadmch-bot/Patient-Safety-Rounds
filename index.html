@@ -854,7 +854,6 @@ async function addRoundMember(payload){
     if(!res.ok || !data.success){ toast(data.error||'Save failed'); return null; }
     ROUND_MEMBERS.push(data.member);
     toast(STATE.lang==='ar'?'تم حفظ العضو':'Member saved');
-    render();
     return data.member;
   } catch(error){ toast(error.message); return null; }
 }
@@ -879,7 +878,7 @@ async function deleteRoundMember(id){
     if(!res.ok || !data.success){ toast(data.error||'Delete failed'); return; }
     ROUND_MEMBERS = ROUND_MEMBERS.filter(m=>String(m.id)!==String(id));
     toast(STATE.lang==='ar'?'تم حذف العضو':'Member deleted');
-    render();
+    refreshWhatsAppAdminLocal();
   } catch(error){ toast(error.message); }
 }
 // One-click convenience to seed the roster that appears on the hospital's signed round
@@ -1359,7 +1358,18 @@ function restoreCurrentRoute(){
     }
   }catch(e){}
 }
-function go(view, params){ STATE.view=view; STATE.params=params||{}; saveCurrentRoute(); closeDropdowns(); window.scrollTo(0,0); renderShell(); render(); }
+function go(view, params){
+  STATE.view=view; STATE.params=params||{}; saveCurrentRoute(); closeDropdowns();
+  // SPA navigation: never rebuild the whole shell for an ordinary click.
+  // This removes the visible page flash/reload feeling, especially on mobile.
+  document.querySelectorAll('.nav-item').forEach(btn=>{
+    const oc=btn.getAttribute('onclick')||'';
+    btn.classList.toggle('active', oc.includes(`go('${view}')`));
+  });
+  const content=document.getElementById('content');
+  if(content) content.scrollIntoView({block:'start'});
+  render();
+}
 
 /* ================================================================
    VIEW RENDERERS
@@ -3283,6 +3293,10 @@ async function renderWhatsAppAdminAsync(){
   } catch(error){ /* leave whatever was previously loaded */ }
   root.innerHTML = renderWhatsAppAdminSections();
 }
+function refreshWhatsAppAdminLocal(){
+  const root=document.getElementById('wa-admin-root');
+  if(root) root.innerHTML=renderWhatsAppAdminSections();
+}
 function selectedRound(){ return WA_ADMIN_STATE.rounds.find(r=>String(r.id)===String(WA_ADMIN_STATE.selectedRoundId)) || null; }
 function manualRecipients(){
   const round = selectedRound();
@@ -3324,7 +3338,7 @@ function manualMessagePreviewText(){
 
 function setManualMessageType(type){
   WA_ADMIN_STATE.messageType = type;
-  go('admin',{tab:'whatsapp'});
+  refreshWhatsAppAdminLocal();
 }
 
 function renderWhatsAppAdminSections(){
@@ -3432,7 +3446,7 @@ function renderWhatsAppAdminSections(){
         </div>
       </div>
 
-      ${WA_ADMIN_STATE.recipientType==='mobile'? `<div class="field"><label>${STATE.lang==='ar'?'رقم الجوال':'Mobile Number'}</label><input id="ms-mobile" value="${esc(WA_ADMIN_STATE.manualNumber)}" placeholder="+9665XXXXXXXX" onchange="WA_ADMIN_STATE.manualNumber=this.value; go('admin',{tab:'whatsapp'})"></div>` : ''}
+      ${WA_ADMIN_STATE.recipientType==='mobile'? `<div class="field"><label>${STATE.lang==='ar'?'رقم الجوال':'Mobile Number'}</label><input id="ms-mobile" value="${esc(WA_ADMIN_STATE.manualNumber)}" placeholder="+9665XXXXXXXX" onchange="WA_ADMIN_STATE.manualNumber=this.value"></div>` : ''}
       ${WA_ADMIN_STATE.recipientType==='single'? `<div class="field"><label>${STATE.lang==='ar'?'العضو':'Member'}</label><select id="ms-member" onchange="onManualSingleMemberChange(this.value)">
           <option value="">${STATE.lang==='ar'?'اختر عضوًا':'Select a member'}</option>
           ${ROUND_MEMBERS.map(m=>`<option value="${m.id}" ${String(m.id)===String(WA_ADMIN_STATE.selectedMemberId)?'selected':''}>${esc(m.full_name)} – ${esc(m.job_title||'—')} – ${esc(m.mobile||(STATE.lang==='ar'?'لا يوجد جوال':'no mobile'))}</option>`).join('')}
@@ -3622,13 +3636,13 @@ function renderWhatsAppAdminSections(){
 
       <div class="field-row">
         <div class="field"><label>${STATE.lang==='ar'?'لغة الرسالة':'Message Language'}</label>
-          <select id="ms-lang" onchange="WA_ADMIN_STATE.language=this.value; go('admin',{tab:'whatsapp'})">
+          <select id="ms-lang" onchange="WA_ADMIN_STATE.language=this.value; refreshWhatsAppAdminLocal()">
             <option value="ar" ${WA_ADMIN_STATE.language==='ar'?'selected':''}>${STATE.lang==='ar'?'العربية':'Arabic'}</option>
             <option value="en" ${WA_ADMIN_STATE.language==='en'?'selected':''}>${STATE.lang==='ar'?'الإنجليزية':'English'}</option>
           </select>
         </div>
         <div class="field"><label>${STATE.lang==='ar'?'قالب WhatsApp':'WhatsApp Template'}</label>
-          <select id="ms-template" onchange="WA_ADMIN_STATE.templateName=this.value; go('admin',{tab:'whatsapp'})">
+          <select id="ms-template" onchange="WA_ADMIN_STATE.templateName=this.value; refreshWhatsAppAdminLocal()">
             ${WA_ADMIN_STATE.templates.map(t=>`<option value="${t.name}" ${t.name===WA_ADMIN_STATE.templateName?'selected':''}>${t.name} (${t.status})</option>`).join('') || `<option value="">${STATE.lang==='ar'?'لا توجد قوالب':'No templates'}</option>`}
           </select>
         </div>
@@ -3777,19 +3791,19 @@ function renderWhatsAppAdminSections(){
 function onAttendanceRoundChange(id){
   WA_ADMIN_STATE.selectedRoundId = id;
   try{ localStorage.setItem('psr_selected_attendance_round', String(id||'')); }catch(e){}
-  go('admin',{tab:'whatsapp'});
+  renderWhatsAppAdminAsync();
 }
 function onManualRoundChange(id){
   WA_ADMIN_STATE.selectedRoundId = id;
   try{ localStorage.setItem('psr_selected_attendance_round', String(id||'')); }catch(e){}
-  go('admin',{tab:'whatsapp'});
+  renderWhatsAppAdminAsync();
 }
-function setManualRecipientType(t){ WA_ADMIN_STATE.recipientType = t; go('admin',{tab:'whatsapp'}); }
+function setManualRecipientType(t){ WA_ADMIN_STATE.recipientType = t; refreshWhatsAppAdminLocal(); }
 function onManualSingleMemberChange(id){
   WA_ADMIN_STATE.selectedMemberId = id;
   const m = ROUND_MEMBERS.find(x=>String(x.id)===String(id));
   if(m && m.preferred_language) WA_ADMIN_STATE.language = m.preferred_language;
-  go('admin',{tab:'whatsapp'});
+  refreshWhatsAppAdminLocal();
 }
 function toggleManualMember(id, checked){
   id = String(id);
@@ -3803,7 +3817,7 @@ function toggleManualMember(id, checked){
       WA_ADMIN_STATE.selectedMemberIds.filter(x => String(x) !== id);
   }
 
-  go('admin',{tab:'whatsapp'});
+  // Keep the current page in place; checkbox already reflects the selection.
 }
 
 function removeManualMember(id){
@@ -3812,12 +3826,12 @@ function removeManualMember(id){
   WA_ADMIN_STATE.selectedMemberIds =
     WA_ADMIN_STATE.selectedMemberIds.filter(x => String(x) !== id);
 
-  go('admin',{tab:'whatsapp'});
+  refreshWhatsAppAdminLocal();
 }
 
 function clearManualMembers(){
   WA_ADMIN_STATE.selectedMemberIds = [];
-  go('admin',{tab:'whatsapp'});
+  refreshWhatsAppAdminLocal();
 }
 function filterManualHistory(){
   const round = document.getElementById('mh-filter-round').value;
@@ -3940,7 +3954,7 @@ async function submitMemberForm(id){
   };
   if(id){ await updateRoundMember(id, payload); } else { await addRoundMember(payload); }
   closeModal();
-  go('admin',{tab:'whatsapp'});
+  refreshWhatsAppAdminLocal();
 }
 
 function adminDepartments(){
@@ -4176,7 +4190,7 @@ function renderPublicRound(){
           <div class="field"><label>${STATE.lang==='ar'?'الإجراء الفوري المتخذ':'Immediate Action Taken'}</label><textarea id="pr-immediate"></textarea></div>
           <div class="field"><label>${STATE.lang==='ar'?'الإجراء المقترح':'Suggested Action'}</label><textarea id="pr-suggested"></textarea></div>
           <div class="field"><label>${STATE.lang==='ar'?'تعليقات':'Comments'}</label><textarea id="pr-comments"></textarea></div>
-          <button class="btn btn-primary" onclick="submitPublicObservation()">${STATE.lang==='ar'?'إرسال الملاحظة':'Submit Observation'}</button>
+          <button class="btn btn-primary" id="pr-submit-btn" onclick="submitPublicObservation()">${STATE.lang==='ar'?'إرسال الملاحظة':'Submit Observation'}</button>
         </div>
       </div>
       <div class="card">
@@ -4209,15 +4223,21 @@ async function submitPublicObservation(){
     suggested_action: document.getElementById('pr-suggested').value,
     comments: document.getElementById('pr-comments').value,
   };
+  const submitBtn=document.getElementById('pr-submit-btn');
+  if(submitBtn?.disabled) return;
+  if(submitBtn){ submitBtn.disabled=true; submitBtn.textContent=STATE.lang==='ar'?'جارٍ الإرسال...':'Submitting…'; }
   try{
     const res = await fetch('/api/public-round', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
     const data = await res.json();
-    if(!res.ok || !data.success){ toast(data.error||(STATE.lang==='ar'?'فشل الإرسال':'Failed to submit')); return; }
+    if(!res.ok || !data.success){ toast(data.error||(STATE.lang==='ar'?'فشل الإرسال':'Failed to submit')); if(submitBtn){submitBtn.disabled=false;submitBtn.textContent=STATE.lang==='ar'?'إرسال الملاحظة':'Submit Observation';} return; }
     PUBLIC_ROUND_STATE.submitted.unshift(data.observation);
     ['pr-obs','pr-location','pr-immediate','pr-suggested','pr-comments'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
     toast(STATE.lang==='ar'?'تم إرسال الملاحظة لمراجعة الجودة':'Observation submitted for QPS review');
     renderPublicRound();
-  } catch(error){ toast(STATE.lang==='ar'?'تعذّر الإرسال':'Could not submit'); }
+  } catch(error){
+    toast(STATE.lang==='ar'?'تعذّر الإرسال':'Could not submit');
+    if(submitBtn){ submitBtn.disabled=false; submitBtn.textContent=STATE.lang==='ar'?'إرسال الملاحظة':'Submit Observation'; }
+  }
 }
 
 /* ---------------- Public corrective-plan page: /plan/:token ---------------- */
@@ -4253,7 +4273,8 @@ function renderPublicPlan(){
     <div class="card" style="margin-bottom:16px;">
       <div class="card-head"><h3>${STATE.lang==='ar'?'الملاحظة المعتمدة':'Approved Finding'}</h3></div>
       <div class="card-pad">
-        <div class="field"><label>${STATE.lang==='ar'?'الملاحظة':'Observation'}</label><div>${esc(finding.observation_text||finding.checklist_item||'—')}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'الملاحظة المعتمدة كاملة':'Full Approved Observation'}</label><div style="font-size:14px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--teal-50);padding:12px;border-radius:8px;">${esc(finding.observation_text||finding.checklist_item||'—')}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><div>${esc(finding.checklist_item||'—')}</div></div>
         <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><div>${domainName(finding.domain)}</div></div>
         <div class="field"><label>${STATE.lang==='ar'?'مستوى الخطورة':'Risk Level'}</label><div>${riskBadge(finding.risk_level)}</div></div>
         <div class="field-row">
@@ -4326,8 +4347,9 @@ async function uploadPublicFile(kind){
   if(!file){toast('يرجى اختيار ملف أولاً');return;}
   if(!/\.(pdf|doc|docx|jpg|jpeg|png)$/i.test(file.name)){toast('نوع الملف غير مدعوم');return;}
   // Base64 expands the request; keep below the configured Vercel request-body limit.
-  if(file.size>2.5*1024*1024){toast('الملف كبير للرفع بهذه الطريقة. اختاري ملفًا أصغر من 2.5 MB أو فعّلي الرفع المباشر للتخزين.');return;}
+  if(file.size>2.2*1024*1024){toast(STATE.lang==='ar'?'حجم الملف كبير. اختاري ملفًا أقل من 2.2 MB لضمان رفعه بسرعة.':'File is too large. Choose a file under 2.2 MB for reliable upload.');return;}
   publicUploadBusy(true);
+  toast(STATE.lang==='ar'?'جارٍ رفع الملف وحفظه، يرجى الانتظار...':'Uploading and saving file, please wait…');
   try{
     const before=new Set(PUBLIC_PLAN_STATE.evidence.map(e=>String(e.id)));
     const encoded=await fileToBase64(file);
@@ -4387,7 +4409,7 @@ async function viewQpsReviewAsync(){
           <div class="checklist-item">
             <div class="ci-top">
               <div><div class="ci-title">${domainName(o.domain)} — ${esc(o.checklist_item)}</div>
-                <div class="muted" style="font-size:11.3px;margin-top:3px;">${esc(o.observation_text)}</div>
+                <div style="font-size:13px;line-height:1.8;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--teal-50);padding:10px 12px;border-radius:8px;"><b>${STATE.lang==='ar'?'نص الملاحظة كاملًا:':'Full observation:'}</b><br>${esc(o.observation_text)}</div>
                 <div class="muted" style="font-size:10.8px;margin-top:4px;">${STATE.lang==='ar'?'مقدّم من':'Submitted by'} ${esc(o.member_name||'—')} (${esc(o.member_role||'—')}) · ${fmtDateTime(new Date(o.submitted_at))}</div>
               </div>
             </div>
@@ -4536,7 +4558,8 @@ async function viewPlanLiveDetailAsync(id){
     <div class="card-pad">
       <div class="field-row">
         <div class="field"><label>${STATE.lang==='ar'?'القسم':'Department'}</label><div>${deptName(finding.department)}</div></div>
-        <div class="field"><label>${STATE.lang==='ar'?'الملاحظة':'Observation'}</label><div>${esc(finding.observation_text||finding.checklist_item||'—')}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'الملاحظة المعتمدة كاملة':'Full Approved Observation'}</label><div style="font-size:14px;line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--teal-50);padding:12px;border-radius:8px;">${esc(finding.observation_text||finding.checklist_item||'—')}</div></div>
+        <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><div>${esc(finding.checklist_item||'—')}</div></div>
         <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><div>${domainName(finding.domain)}</div></div>
       </div>
       <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><div>${esc(finding.checklist_item||'—')}</div></div>
@@ -4895,13 +4918,13 @@ async function viewExecutiveReportAsync(roundId){
       <table style="margin-bottom:14px;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th>DESCRIPTION / REMARKS</th></tr></thead><tbody>
       ${DOMAINS.map(d=>{
         const items = byDomain[d.id];
-        const remark = items.length? items.map(f=>esc(f.checklist_item||domainName(d.id))+' ('+riskLabel(f.risk_level)+')').join('; ') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
+        const remark = items.length? items.map(f=>`<div style="margin-bottom:6px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(f.checklist_item||domainName(d.id))}</b>: ${esc(f.observation_text||'—')} <span class="muted">(${riskLabel(f.risk_level)})</span></div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
         return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
       }).join('')}
       </tbody></table>
       <b style="font-size:12.5px;">Findings / Remarks &amp; Corrective Action Status</b>
       <table style="margin:8px 0 14px;"><thead><tr><th>Finding</th><th>Risk</th><th>Responsible Dept</th><th>Plan Status</th><th>QPS Verification</th></tr></thead><tbody>
-      ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;">${esc(f.checklist_item||domainName(f.domain))}</td><td>${riskLabel(f.risk_level)}</td><td>${deptName(f.responsible_department||f.department)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):'—'}</td></tr>`).join('') : `<tr><td colspan="5">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
+      ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(f.checklist_item||domainName(f.domain))}</b><br>${esc(f.observation_text||'—')}</td><td>${riskLabel(f.risk_level)}</td><td>${deptName(f.responsible_department||f.department)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):'—'}</td></tr>`).join('') : `<tr><td colspan="5">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
       </tbody></table>
       <div class="grid g2">
         <div><b>NEXT ROUND DATE:</b><br>${nextRoundLine}</div>

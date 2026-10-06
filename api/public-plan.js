@@ -54,6 +54,19 @@ export default async function handler(req, res) {
 
       const findings = await sbGet("findings", `?id=eq.${encodeURIComponent(plan.finding_id)}`);
       const finding = findings[0] || null;
+      // A finding stores the checklist item, while the exact wording entered during
+      // the round lives on the linked observation.  Return that full text so the
+      // department always sees exactly what Quality approved.
+      if (finding && finding.observation_id) {
+        const obsRows = await sbGet("observations", `?id=eq.${encodeURIComponent(finding.observation_id)}`);
+        if (obsRows[0]) {
+          finding.observation_text = obsRows[0].observation_text || null;
+          finding.location = obsRows[0].location || null;
+          finding.immediate_action = obsRows[0].immediate_action || null;
+          finding.suggested_action = obsRows[0].suggested_action || null;
+          finding.observation_comments = obsRows[0].comments || null;
+        }
+      }
       const evidence = await sbGet("evidence", `?plan_id=eq.${encodeURIComponent(plan.id)}&order=uploaded_at.desc`);
 
       await attachSignedUrls(plan, evidence);
@@ -105,6 +118,10 @@ export default async function handler(req, res) {
         const evidenceRow = {
           plan_id: plan.id,
           file_name: b.file_name,
+          // Keep the legacy column populated for databases created from the
+          // original schema where evidence.file_url is still NOT NULL.  The UI
+          // never exposes this value; reads replace it with a short-lived signed URL.
+          file_url: path,
           storage_bucket: BUCKETS.EVIDENCE,
           storage_path: path,
           description: b.description || null,

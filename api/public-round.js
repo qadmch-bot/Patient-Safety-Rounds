@@ -69,6 +69,16 @@ export default async function handler(req, res) {
         return res.status(200).json({ success: true });
       }
 
+      // Prevent duplicate observations caused by a double tap, slow mobile
+      // connection, or browser retry. Exact same round/member/domain/item/text
+      // is treated as the same submission.
+      const normalizedText = String(b.observation_text).trim();
+      const duplicateQuery = `?round_id=eq.${encodeURIComponent(round.id)}&member_name=eq.${encodeURIComponent(member.full_name)}&domain=eq.${encodeURIComponent(b.domain)}&checklist_item=eq.${encodeURIComponent(b.checklist_item)}&observation_text=eq.${encodeURIComponent(normalizedText)}&limit=1`;
+      const duplicateRows = await sbGet("observations", duplicateQuery);
+      if (duplicateRows.length) {
+        return res.status(200).json({ success: true, duplicate_prevented: true, observation: duplicateRows[0] });
+      }
+
       const row = {
         round_id: round.id,
         member_name: member.full_name,
@@ -76,7 +86,7 @@ export default async function handler(req, res) {
         department: b.department || member.department,
         domain: b.domain,
         checklist_item: b.checklist_item,
-        observation_text: b.observation_text,
+        observation_text: normalizedText,
         location: b.location || null,
         immediate_action: b.immediate_action || null,
         suggested_action: b.suggested_action || null,

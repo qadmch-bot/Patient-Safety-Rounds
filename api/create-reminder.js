@@ -1,4 +1,4 @@
-import { sbGet, sbUpsert, logAudit, setCors, handleConfigError } from "../lib/supabase.js";
+import { sbGet, sbInsert, logAudit, setCors, handleConfigError } from "../lib/supabase.js";
 
 // POST /api/create-reminder
 // Body: { round_id: "PSR-2026-013" }
@@ -111,14 +111,25 @@ export default async function handler(req, res) {
           recipient_phone: m.mobile,
           reminder_type: type,
           message: buildMessage(round, m, type),
-          event_key: `${round.id}|${m.id}|${type}`,
+          // Include the scheduled instant in the key. Re-opening/saving the same
+          // round cannot reset an already-sent reminder back to pending, while a
+          // genuinely rescheduled round gets a new idempotency key.
+          event_key: `${round.id}|${m.id}|${type}|${scheduledAt}`,
           status: "pending",
           scheduled_at: scheduledAt,
         });
       });
     });
 
-    const inserted = await sbUpsert("whatsapp_reminders", rows, "event_key");
+    // Never UPSERT a sent reminder: merge-upsert would set status back to
+    // pending and could send the same WhatsApp twice. Insert only missing keys.
+    const inserted = [];
+    for (const reminder of rows) {
+      const existing = await sbGet("whatsapp_reminders", `?event_key=eq.${encodeURIComponent(reminder.event_key)}&limit=1`);
+      if (existing.length) continue;
+      const created = await sbInsert("whatsapp_reminders", [reminder]);
+      if (created[0]) inserted.push(created[0]);
+    }
 
     await logAudit({
       action: "Reminders Created",

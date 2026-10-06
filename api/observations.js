@@ -62,6 +62,22 @@ export default async function handler(req, res) {
       }
 
       // decision === 'approve'
+      // Idempotency guard: a double click / repeated network request must not
+      // create a second finding, second plan, or second WhatsApp message.
+      const existingFindings = await sbGet("findings", `?observation_id=eq.${encodeURIComponent(obs.id)}&order=id.asc&limit=1`);
+      if (existingFindings.length) {
+        const existingFinding = existingFindings[0];
+        const existingPlans = await sbGet("improvement_plans", `?finding_id=eq.${encodeURIComponent(existingFinding.id)}&order=id.asc&limit=1`);
+        return res.status(200).json({
+          success: true,
+          duplicate_prevented: true,
+          observation: obs,
+          finding: existingFinding,
+          plan: existingPlans[0] || null,
+          whatsapp: { success: true, skipped: true, reason: "Already approved; duplicate notification prevented." },
+          recurring: !!existingFinding.is_recurring
+        });
+      }
       if (b.corrective_required && (!/^\d{4}-\d{2}-\d{2}$/.test(b.due_date || "") || b.due_date < new Date().toISOString().slice(0,10))) return res.status(400).json({success:false,error:"A valid due_date is required before approving a corrective plan."});
       if (!b.risk_level) return res.status(400).json({ success: false, error: "risk_level is required to approve." });
       const patch = {
