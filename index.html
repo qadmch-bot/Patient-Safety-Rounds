@@ -4913,7 +4913,7 @@ async function viewExecutiveReportAsync(roundId){
       <table style="margin-bottom:14px;"><tbody>
         <tr><td style="width:18%;font-weight:700;">MONTH:</td><td>${fmtDate(round.planned_date)}</td><td style="width:18%;font-weight:700;">ROUND ID:</td><td>${esc(round.id)}</td></tr>
         <tr><td style="font-weight:700;">DEPARTMENT(S):</td><td colspan="3">${round.departments.map(deptName).join(' + ')}</td></tr>
-        <tr><td style="font-weight:700;vertical-align:top;">ROUND MEMBERS:</td><td colspan="3">${participants.length? participants.map(p=>esc(p.full_name)+(p.job_title?' — '+esc(p.job_title):'')).join(', ') : '—'}</td></tr>
+        <tr><td style="font-weight:700;vertical-align:top;">ROUND MEMBERS:</td><td colspan="3">${participants.length? participants.map(p=>{const m=p.round_members||p;return esc(m.full_name||'—')+(m.job_title?' — '+esc(m.job_title):'');}).join(', ') : '—'}</td></tr>
       </tbody></table>
       <table style="margin-bottom:14px;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th>DESCRIPTION / REMARKS</th></tr></thead><tbody>
       ${DOMAINS.map(d=>{
@@ -4926,9 +4926,33 @@ async function viewExecutiveReportAsync(roundId){
       <table style="margin:8px 0 14px;"><thead><tr><th>Finding</th><th>Risk</th><th>Responsible Dept</th><th>Plan Status</th><th>QPS Verification</th></tr></thead><tbody>
       ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(f.checklist_item||domainName(f.domain))}</b><br>${esc(f.observation_text||'—')}</td><td>${riskLabel(f.risk_level)}</td><td>${deptName(f.responsible_department||f.department)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):'—'}</td></tr>`).join('') : `<tr><td colspan="5">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
       </tbody></table>
-      <div class="grid g2">
-        <div><b>NEXT ROUND DATE:</b><br>${nextRoundLine}</div>
-        <div><b>PATIENT SAFETY ROUNDS MEMBERS (Sign-off):</b><br>Hospital Director · QM&PS Director · Director of Nursing · Safety Officer Manager · IPCD Director · Risk Manager</div>
+      <div style="margin-top:14px;margin-bottom:14px;">
+        <b>NEXT ROUND DATE:</b><br>${nextRoundLine}
+      </div>
+
+      <div style="margin-top:16px;">
+        <div style="font-weight:800;font-size:13px;margin-bottom:7px;">PATIENT SAFETY ROUNDS MEMBERS (Sign-off)</div>
+        <table class="signoff-table" style="width:100%;border-collapse:collapse;table-layout:fixed;">
+          <thead>
+            <tr>
+              <th style="width:34%;text-align:center;border:1px solid #8fa6aa;padding:8px;background:#dceaf1;color:#1f2f33;font-size:11px;">NAME</th>
+              <th style="width:34%;text-align:center;border:1px solid #8fa6aa;padding:8px;background:#dceaf1;color:#1f2f33;font-size:11px;">TITLE</th>
+              <th style="width:32%;text-align:center;border:1px solid #8fa6aa;padding:8px;background:#dceaf1;color:#1f2f33;font-size:11px;">SIGNATURE &amp; DATE</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${participants.length ? participants.map(p=>{
+              const m = p.round_members || p;
+              return `<tr>
+                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;font-size:11.5px;">${esc(m.full_name||'—')}</td>
+                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;font-size:11.5px;">${esc(m.job_title||'—')}</td>
+                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;"></td>
+              </tr>`;
+            }).join('') : `<tr>
+              <td colspan="3" style="border:1px solid #8fa6aa;padding:12px;text-align:center;font-size:11.5px;">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة':'No members linked to this round'}</td>
+            </tr>`}
+          </tbody>
+        </table>
       </div>
       <div class="print-only" style="margin-top:20px;font-size:10.5px;color:var(--ink-soft);">Generated from the Patient Safety Rounds Management System — ${fmtDate(todayStr())}</div>
     </div>`;
