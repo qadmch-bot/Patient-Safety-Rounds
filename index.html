@@ -4944,9 +4944,9 @@ async function viewExecutiveReportAsync(roundId){
             ${participants.length ? participants.map(p=>{
               const m = p.round_members || p;
               return `<tr>
-                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;font-size:11.5px;">${esc(m.full_name||'—')}</td>
-                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;font-size:11.5px;">${esc(m.job_title||'—')}</td>
-                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;"></td>
+                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;font-size:11.5px;">${esc(m.full_name||'—')}</td>
+                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;font-size:11.5px;">${esc(m.job_title||'—')}</td>
+                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;"></td>
               </tr>`;
             }).join('') : `<tr>
               <td colspan="3" style="border:1px solid #8fa6aa;padding:12px;text-align:center;font-size:11.5px;">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة':'No members linked to this round'}</td>
