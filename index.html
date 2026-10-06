@@ -397,14 +397,18 @@ function addResponsibleDepartment(){
 function deptName(id){ const d=responsibleDepartments().find(x=>x.id===id); if(!d) return id; return STATE.lang==='ar'? d.ar : d.en; }
 
 const DOMAINS = [
- {id:'MEDADMIN', sn:8, en:'Medical Administration', ar:'الإدارة الطبية', scope:'ALL', desc_en:'Medical governance, physician practice, clinical coordination and related safety oversight.', desc_ar:'الحوكمة الطبية وممارسة الأطباء والتنسيق السريري والإشراف المرتبط بسلامة المرضى.', items:[]},
+ {id:'MEDADMIN', sn:8, en:'Medical Administration', ar:'الإدارة الطبية', scope:'ALL', desc_en:'Medical governance, physician practice, clinical coordination and related safety oversight.', desc_ar:'الحوكمة الطبية وممارسة الأطباء والتنسيق السريري والإشراف المرتبط بسلامة المرضى.', items:[
+     {id:'MEDADMIN-1', en:'Clinical Privileges', ar:'الامتيازات الإكلينيكية'},
+     {id:'MEDADMIN-2', en:'VTE', ar:'VTE'},
+     {id:'MEDADMIN-3', en:'Procedural Time Out', ar:'PROCEDURAL TIME OUT'},
+     {id:'MEDADMIN-4', en:'Surgical Site Marking', ar:'SURGICAL SITE MARKING'},
+  ]},
  {id:'QMPS', sn:1, en:'Quality Management & Patient Safety (QM&PS)', ar:'إدارة الجودة وسلامة المرضى', scope:'ALL',
    desc_en:'Core bedside safety practices: identification, falls, pressure injury and device safety.', desc_ar:'ممارسات السلامة الأساسية: تحقق الهوية، السقوط، إصابات الضغط وسلامة الأجهزة.',
    items:[
      {id:'QMPS-1', en:'Patient Identification', ar:'التحقق من هوية المريض'},
      {id:'QMPS-2', en:'Fall Prevention', ar:'الوقاية من السقوط'},
      {id:'QMPS-3', en:'Pressure Sores / Injury Prevention', ar:'الوقاية من إصابات الضغط'},
-     {id:'QMPS-4', en:'Infusion Pump Safety (PPM Calibration)', ar:'سلامة مضخات التسريب (معايرة الصيانة)'},
    ]},
  {id:'PHARM', sn:2, en:'Pharmacy', ar:'الصيدلية', scope:['PHARMACY'],
    desc_en:'Medication storage, expiry, high-alert medication and LASA controls.', desc_ar:'تخزين الأدوية، الصلاحية، الأدوية عالية الخطورة وضوابط الأسماء/الأشكال المتشابهة.',
@@ -431,7 +435,6 @@ const DOMAINS = [
    items:[
      {id:'HR-1', en:'Credentialing & Verification – Clinical Staff', ar:'الاعتماد والتحقق - الكادر الإكلينيكي'},
      {id:'HR-2', en:'Privileging – Medical Physician', ar:'الامتيازات - الطبيب'},
-     {id:'HR-3', en:'Conscious Sedation', ar:'التخدير الواعي'},
    ]},
  {id:'IPCD', sn:6, en:'Infection Prevention & Control (IPCD)', ar:'مكافحة العدوى', scope:'ALL',
    desc_en:'Hand hygiene, donning/doffing and transmission-based precautions.', desc_ar:'نظافة اليدين، ارتداء/خلع المعدات واحتياطات انتقال العدوى.',
@@ -2065,7 +2068,7 @@ function openObsForm(roundId, dept, domainId, itemId){
     <div class="field-row">
       <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label>
         <select id="of-domain" onchange="refreshObsItemOptions()">${domainsOpts.map(d=>`<option value="${d.id}" ${d.id===domainId?'selected':''}>${d.sn}. ${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select></div>
-      <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><select id="of-item"></select></div>
+      <div class="field"><label>${STATE.lang==='ar'?'بنود التدقيق (يمكن اختيار أكثر من بند)':'Checklist Items (multiple selection allowed)'}</label><select id="of-item" multiple size="4"></select><div class="muted" style="font-size:10.6px;margin-top:4px;">${STATE.lang==='ar'?'يمكن اختيار أكثر من بند لنفس الملاحظة':'You may select more than one item for the same observation'}</div></div>
     </div>
     <div class="field"><label>${STATE.lang==='ar'?'الموقع':'Location'}</label><input id="of-loc" placeholder="e.g. Nurses station"></div>
     <div class="field"><label>${STATE.lang==='ar'?'الملاحظة':'Observation'} <span class="req">*</span></label><textarea id="of-text" placeholder="Describe what was observed…"></textarea></div>
@@ -2099,7 +2102,7 @@ function submitObservation(roundId, id){
   if(!text){ toast(STATE.lang==='ar'?'يرجى إدخال نص الملاحظة':'Please enter the observation text'); return; }
   const dept = document.getElementById('of-dept').value;
   const domain = document.getElementById('of-domain').value;
-  const item = document.getElementById('of-item').value;
+  const item = Array.from(document.getElementById('of-item').selectedOptions).map(o=>o.value).join(' | ');
   const risk = document.getElementById('of-risk').value;
   const obs = {
     id, roundId, dept, domain, item,
@@ -4182,7 +4185,7 @@ function renderPublicRound(){
         <div class="card-pad">
           <div class="field-row">
             <div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><select id="pr-domain" onchange="refreshPublicItems()">${DOMAINS.filter(d=>round.departments.some(dep=>domainApplies(d,dep))).map(d=>`<option value="${d.id}">${d.sn}. ${STATE.lang==='ar'?d.ar:d.en}</option>`).join('')}</select></div>
-            <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist Item'}</label><select id="pr-item"></select></div>
+            <div class="field"><label>${STATE.lang==='ar'?'بنود التدقيق (يمكن اختيار أكثر من بند)':'Checklist Items (select one or more)'}</label><div id="pr-items" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff;"></div></div>
           </div>
           <div class="field"><label>${STATE.lang==='ar'?'القسم':'Department'}</label><select id="pr-dept">${round.departments.map(d=>`<option value="${d}">${deptName(d)}</option>`).join('')}</select></div>
           <div class="field"><label>${STATE.lang==='ar'?'الموقع':'Location'}</label><input id="pr-location"></div>
@@ -4207,16 +4210,21 @@ async function selectPublicMember(id){ PUBLIC_ROUND_STATE.selectedMemberId = id|
 function refreshPublicItems(){
   const el = document.getElementById('pr-domain'); if(!el) return;
   const domain = DOMAINS.find(d=>d.id===el.value);
-  document.getElementById('pr-item').innerHTML = domain.items.map(i=>`<option value="${i.id}">${STATE.lang==='ar'?i.ar:i.en}</option>`).join('');
+  const box = document.getElementById('pr-items'); if(!box) return;
+  box.innerHTML = domain.items.length ? domain.items.map(i=>`<label style="display:flex;align-items:center;gap:9px;padding:8px 4px;border-bottom:1px solid var(--line-soft);font-size:12.8px;cursor:pointer;"><input type="checkbox" class="pr-item-check" value="${i.id}" style="width:18px;height:18px;flex:none;"> <span>${STATE.lang==='ar'?i.ar:i.en}</span></label>`).join('') : `<span class="muted">${STATE.lang==='ar'?'لا توجد بنود لهذا المجال':'No checklist items for this domain'}</span>`;
+}
+function selectedPublicChecklistItems(){
+  return Array.from(document.querySelectorAll('.pr-item-check:checked')).map(el=>el.value);
 }
 async function submitPublicObservation(){
   const obsText = document.getElementById('pr-obs').value.trim();
   if(!obsText){ toast(STATE.lang==='ar'?'يرجى إدخال نص الملاحظة':'Please enter the observation text'); return; }
+  if(!selectedPublicChecklistItems().length){ toast(STATE.lang==='ar'?'يرجى اختيار بند تدقيق واحد على الأقل':'Please select at least one checklist item'); return; }
   const payload = {
     token: publicToken(), action:'submit_observation', member_id: PUBLIC_ROUND_STATE.selectedMemberId,
     department: document.getElementById('pr-dept').value,
     domain: document.getElementById('pr-domain').value,
-    checklist_item: document.getElementById('pr-item').value,
+    checklist_item: selectedPublicChecklistItems().join(' | '),
     observation_text: obsText,
     location: document.getElementById('pr-location').value,
     immediate_action: document.getElementById('pr-immediate').value,
