@@ -39,6 +39,11 @@ export default async function handler(req, res) {
       const obs = byObservation[String(f.observation_id)] || null;
       return {
         ...f,
+        // The observation is the authoritative source for report classification.
+        // This prevents a stale finding checklist/domain (e.g. VTE) from being
+        // displayed beside an observation that was later corrected by QPS.
+        domain: obs?.domain || f.domain,
+        checklist_item: obs?.checklist_item || f.checklist_item,
         observation_text: obs?.observation_text || null,
         observation_location: obs?.location || null,
         immediate_action: obs?.immediate_action || null,

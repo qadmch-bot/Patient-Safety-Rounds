@@ -5031,7 +5031,7 @@ async function viewExecutiveReportAsync(roundId){
         <div style="font-size:11px;line-height:1.6;text-align:right;" dir="rtl">المملكة العربية السعودية<br>تجمع حفر الباطن الصحي<br>مستشفى الولادة والأطفال</div>
       </div>
       <table style="margin-bottom:14px;"><tbody>
-        <tr><td style="width:18%;font-weight:700;">MONTH:</td><td>${fmtDate(round.planned_date)}</td><td style="width:18%;font-weight:700;">ROUND ID:</td><td>${esc(round.id)}</td></tr>
+        <tr><td style="width:18%;font-weight:700;">ROUND DATE:</td><td>${fmtDate(round.planned_date)}</td><td style="width:18%;font-weight:700;">ROUND ID:</td><td>${esc(round.id)}</td></tr>
         <tr><td style="font-weight:700;">DEPARTMENT(S):</td><td colspan="3">${round.departments.map(deptName).join(' + ')}</td></tr>
         <tr><td style="font-weight:700;vertical-align:top;">ROUND MEMBERS:</td><td colspan="3">${participants.length? participants.map(p=>{const m=p.round_members||p;return esc(m.full_name||'—')+(m.job_title?' — '+esc(m.job_title):'');}).join(', ') : '—'}</td></tr>
       </tbody></table>
