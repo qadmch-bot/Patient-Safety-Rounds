@@ -9,7 +9,7 @@ function randomToken() {
 
 // GET   /api/observations                → list (optionally ?status=... , ?department=...)
 // PATCH /api/observations?id=123          → QPS decision
-//   body: { decision: 'approve'|'reject'|'clarify'|'edit',
+//   body: { decision: 'approve'|'reject'|'clarify'|'edit'|'reopen'|'delete',
 //            edited_text?, qps_reviewer, notes?,
 //            risk_level?, responsible_department?, responsible_person?,
 //            responsible_member_id?, corrective_required? }
@@ -32,13 +32,31 @@ export default async function handler(req, res) {
       if (!id) return res.status(400).json({ success: false, error: "id query param is required." });
       const b = req.body || {};
       const decision = b.decision;
-      if (!["approve", "reject", "clarify", "edit"].includes(decision)) {
-        return res.status(400).json({ success: false, error: "decision must be approve, reject, clarify or edit." });
+      if (!["approve", "reject", "clarify", "edit", "reopen", "delete"].includes(decision)) {
+        return res.status(400).json({ success: false, error: "Invalid observation decision." });
       }
 
       const rows = await sbGet("observations", `?id=eq.${encodeURIComponent(id)}`);
       if (!rows.length) return res.status(404).json({ success: false, error: "Observation not found." });
       const obs = rows[0];
+
+      if (decision === "reopen" || decision === "delete") {
+        const linkedFindings = await sbGet("findings", `?observation_id=eq.${encodeURIComponent(obs.id)}`);
+        const targetStatus = decision === "delete" ? "Deleted" : "Submitted for QPS Review";
+        const patch = {
+          status: targetStatus,
+          qps_reviewer: b.qps_reviewer || "Quality Reviewer",
+          qps_decision_notes: decision === "delete" ? "Deleted by QPS after review" : "Reopened by QPS for correction/review",
+          qps_decision_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        const updated = await sbPatch("observations", `?id=eq.${encodeURIComponent(id)}`, patch);
+        for (const finding of linkedFindings) {
+          await sbPatch("findings", `?id=eq.${encodeURIComponent(finding.id)}`, { status: decision === "delete" ? "Deleted" : "Reopened" });
+        }
+        await logAudit({ action: decision === "delete" ? "Observation Deleted" : "Observation Reopened", entity_type: "observation", entity_id: id, actor: patch.qps_reviewer, previous_value: obs, new_value: patch });
+        return res.status(200).json({ success: true, observation: updated[0], linked_findings: linkedFindings.length });
+      }
 
       if (decision === "edit") {
         const patch = { updated_at: new Date().toISOString() };
@@ -68,14 +86,24 @@ export default async function handler(req, res) {
       if (existingFindings.length) {
         const existingFinding = existingFindings[0];
         const existingPlans = await sbGet("improvement_plans", `?finding_id=eq.${encodeURIComponent(existingFinding.id)}&order=id.asc&limit=1`);
+        if (["Reopened", "Deleted"].includes(existingFinding.status) || obs.status !== "Approved") {
+          const restoredObsPatch = {
+            status: "Approved", qps_reviewer: b.qps_reviewer || "Quality Reviewer", qps_decision_notes: b.notes || null,
+            qps_decision_at: new Date().toISOString(), risk_level: b.risk_level || obs.risk_level || existingFinding.risk_level,
+            responsible_department: b.responsible_department || obs.responsible_department || existingFinding.department || obs.department,
+            responsible_person: b.responsible_person || obs.responsible_person || existingFinding.responsible_person || null,
+            corrective_required: b.corrective_required ?? obs.corrective_required ?? existingFinding.corrective_required, updated_at: new Date().toISOString()
+          };
+          const restoredObs = await sbPatch("observations", `?id=eq.${encodeURIComponent(id)}`, restoredObsPatch);
+          const restoredFinding = await sbPatch("findings", `?id=eq.${encodeURIComponent(existingFinding.id)}`, {
+            status:"Approved", risk_level:restoredObsPatch.risk_level, responsible_department:restoredObsPatch.responsible_department, department:restoredObsPatch.responsible_department, responsible_person:restoredObsPatch.responsible_person
+          });
+          await logAudit({ action:"Observation Re-approved", entity_type:"observation", entity_id:id, actor:restoredObsPatch.qps_reviewer, previous_value:obs, new_value:restoredObsPatch });
+          return res.status(200).json({ success:true, observation:restoredObs[0], finding:restoredFinding[0], plan:existingPlans[0]||null, whatsapp:{success:true,skipped:true,reason:"Existing finding restored; duplicate notification prevented."}, recurring:!!existingFinding.is_recurring });
+        }
         return res.status(200).json({
-          success: true,
-          duplicate_prevented: true,
-          observation: obs,
-          finding: existingFinding,
-          plan: existingPlans[0] || null,
-          whatsapp: { success: true, skipped: true, reason: "Already approved; duplicate notification prevented." },
-          recurring: !!existingFinding.is_recurring
+          success: true, duplicate_prevented: true, observation: obs, finding: existingFinding, plan: existingPlans[0] || null,
+          whatsapp: { success: true, skipped: true, reason: "Already approved; duplicate notification prevented." }, recurring: !!existingFinding.is_recurring
         });
       }
       if (b.corrective_required && (!/^\d{4}-\d{2}-\d{2}$/.test(b.due_date || "") || b.due_date < new Date().toISOString().slice(0,10))) return res.status(400).json({success:false,error:"A valid due_date is required before approving a corrective plan."});
