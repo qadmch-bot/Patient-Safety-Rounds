@@ -287,7 +287,9 @@ tbody tr:last-child td{border-bottom:none;}
 hr.sep{border:none; border-top:1px solid var(--line-soft); margin:16px 0;}
 
 /* Executive report: centered, print-ready hospital table content */
-.executive-main-table th,.executive-main-table td,.executive-findings-table th,.executive-findings-table td{ text-align:center !important; vertical-align:middle !important; line-height:1.55; }
+.executive-main-table,.executive-findings-table{border-collapse:collapse !important;border:1.2px solid #8fa6aa !important;}
+.executive-main-table th,.executive-main-table td,.executive-findings-table th,.executive-findings-table td{ text-align:center !important; vertical-align:middle !important; line-height:1.55; border:1px solid #a9bcc0 !important; padding:8px 7px !important; }
+.executive-main-table th,.executive-findings-table th{border:1.2px solid #789398 !important;}
 .executive-main-table td div,.executive-findings-table td div{ text-align:center !important; }
 @media print{.executive-main-table th,.executive-main-table td,.executive-findings-table th,.executive-findings-table td{ text-align:center !important;vertical-align:middle !important; }}
 </style>
@@ -5038,7 +5040,7 @@ async function viewExecutiveReportAsync(roundId){
       <table class="executive-main-table" dir="rtl" style="margin-bottom:14px;table-layout:fixed;width:100%;"><thead><tr><th style="width:5%;">SN</th><th style="width:18%;">DOMAIN</th><th style="width:25%;">DESCRIPTION</th><th style="width:52%;">REMARKS</th></tr></thead><tbody>
       ${DOMAINS.slice().sort((a,b)=>a.sn-b.sn).map(d=>{
         const items = byDomain[d.id];
-        const remark = items.length? items.map(f=>`<div style="margin-bottom:7px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
+        const remark = items.length? items.map(f=>`<div style="margin-bottom:7px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</div>`).join('') : (STATE.lang==='ar'?'لم يتم رصد ملاحظات':'No Findings Identified');
         return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.5px;">${esc(AUGUST_DESCRIPTIONS[d.id]||'—')}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
       }).join('')}
       </tbody></table>
