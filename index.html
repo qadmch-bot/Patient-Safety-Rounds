@@ -419,9 +419,12 @@ const DOMAINS = [
      {id:'PHARM-4', en:'LASA (Look-Alike Sound-Alike)', ar:'الأدوية متشابهة الاسم/الشكل'},
    ]},
  {id:'LAB', sn:3, en:'Laboratory', ar:'المختبر', scope:['LAB'],
-   desc_en:'Blood transfusion reaction reporting, adverse-event monitoring and OVR/reaction forms.', desc_ar:'الإبلاغ عن تفاعلات نقل الدم، رصد الأحداث الضارة ونماذج البلاغات.',
+   desc_en:'Blood transfusion verification, reaction monitoring, adverse-effect reporting and OVR/reaction documentation.', desc_ar:'التحقق من نقل الدم، متابعة تفاعلات نقل الدم، الآثار الضارة، وتوثيق نماذج OVR والتفاعل.',
    items:[
-     {id:'LAB-1', en:'Blood Transfusion (Reaction, Adverse Effect, Monitoring of OVR & Reaction Form)', ar:'نقل الدم (التفاعل، الأثر الضار، رصد نموذج البلاغ والتفاعل)'},
+     {id:'LAB-1', en:'Blood Transfusion – Are blood products correctly identified and verified before administration?', ar:'نقل الدم – هل يتم تحديد منتجات الدم والتحقق منها بشكل صحيح قبل إعطائها للمريض؟'},
+     {id:'LAB-2', en:'Transfusion Reaction – Are patients appropriately monitored for transfusion reactions, with prompt action when a reaction is suspected?', ar:'تفاعل نقل الدم – هل تتم متابعة المرضى بشكل مناسب لاكتشاف تفاعلات نقل الدم مع اتخاذ إجراء سريع عند الاشتباه بوجود تفاعل؟'},
+     {id:'LAB-3', en:'Adverse Effect – Are adverse effects related to blood transfusion recognized, managed, and reported?', ar:'الأثر الضار – هل يتم التعرف على الآثار الضارة المرتبطة بنقل الدم والتعامل معها والإبلاغ عنها؟'},
+     {id:'LAB-4', en:'OVR & Reaction Form – Are transfusion-related incidents/reactions documented using the required OVR and reaction forms?', ar:'نموذج OVR والتفاعل – هل يتم توثيق الحوادث أو التفاعلات المتعلقة بنقل الدم باستخدام نموذج OVR ونماذج التفاعل المطلوبة؟'},
    ]},
  {id:'FMS', sn:4, en:'Facility Management & Safety (FMS)', ar:'إدارة المرافق والسلامة (FMS)', scope:'ALL',
    desc_en:'Fire response readiness (RACE/PASS) and medical gas safety.', desc_ar:'جاهزية الاستجابة للحريق (RACE/PASS) وسلامة الغازات الطبية.',
@@ -3246,7 +3249,7 @@ function viewAdmin(){
    ================================================================ */
 let WA_ADMIN_STATE = {
   loaded:false, rounds:[], templates:[], manualHistory:[], autoHistory:[],
-  selectedRoundId:'', attendanceByMember:{}, recipientType:'mobile', manualNumber:'', selectedMemberId:'', selectedMemberIds:[],
+  selectedRoundId:'', attendanceByMember:{}, recipientType:'round_group', manualNumber:'', selectedMemberId:'', selectedMemberIds:[],
   language:'ar', templateName:'patient_safety_round_attendance',
   messageType:'round_notice', customMessage:'',
 };
@@ -3303,6 +3306,13 @@ function refreshWhatsAppAdminLocal(){
 function selectedRound(){ return WA_ADMIN_STATE.rounds.find(r=>String(r.id)===String(WA_ADMIN_STATE.selectedRoundId)) || null; }
 function manualRecipients(){
   const round = selectedRound();
+  if(WA_ADMIN_STATE.recipientType==='round_group'){
+    const seen = new Set();
+    return (WA_ADMIN_STATE.attendanceParticipants||[])
+      .filter(m=>m && m.active!==false && m.whatsapp_enabled!==false && m.mobile)
+      .filter(m=>{ const key=String(m.mobile||'').replace(/\s+/g,''); if(!key || seen.has(key)) return false; seen.add(key); return true; })
+      .map(m=>({name:m.full_name||'', mobile:m.mobile, memberId:m.member_id??m.id}));
+  }
   if(WA_ADMIN_STATE.recipientType==='mobile'){
     return WA_ADMIN_STATE.manualNumber? [{name:'', mobile:WA_ADMIN_STATE.manualNumber}] : [];
   }
@@ -3443,12 +3453,14 @@ function renderWhatsAppAdminSections(){
 
       <div class="field"><label>${STATE.lang==='ar'?'نوع المستلم':'Recipient Type'}</label>
         <div class="pill-tabs">
+          <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='round_group'?'active':''}" onclick="setManualRecipientType('round_group')">${STATE.lang==='ar'?'جميع أعضاء الجولة':'All Round Members'}</div>
           <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='mobile'?'active':''}" onclick="setManualRecipientType('mobile')">${STATE.lang==='ar'?'إدخال رقم جوال':'Enter Mobile Number'}</div>
           <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='single'?'active':''}" onclick="setManualRecipientType('single')">${STATE.lang==='ar'?'اختيار عضو موجود':'Select Existing Member'}</div>
           <div class="pill-tab ${WA_ADMIN_STATE.recipientType==='multiple'?'active':''}" onclick="setManualRecipientType('multiple')">${STATE.lang==='ar'?'اختيار عدة أعضاء':'Select Multiple Members'}</div>
         </div>
       </div>
 
+      ${WA_ADMIN_STATE.recipientType==='round_group'? `<div class="side-note" style="margin-bottom:12px;"><b>${STATE.lang==='ar'?'سيتم الإرسال لجميع أعضاء هذه الجولة المفعّل لديهم WhatsApp':'Message will be sent to all WhatsApp-enabled members assigned to this round'}</b><br>${STATE.lang==='ar'?'عدد المستلمين':'Recipients'}: ${manualRecipients().length}${manualRecipients().length? '<br>'+manualRecipients().map(x=>esc(x.name||x.mobile)).join(' · ') : '<br><span class="muted">'+(STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة لديهم رقم واتساب مفعّل.':'No WhatsApp-enabled members are linked to this round.')+'</span>'}</div>` : ''}
       ${WA_ADMIN_STATE.recipientType==='mobile'? `<div class="field"><label>${STATE.lang==='ar'?'رقم الجوال':'Mobile Number'}</label><input id="ms-mobile" value="${esc(WA_ADMIN_STATE.manualNumber)}" placeholder="+9665XXXXXXXX" onchange="WA_ADMIN_STATE.manualNumber=this.value"></div>` : ''}
       ${WA_ADMIN_STATE.recipientType==='single'? `<div class="field"><label>${STATE.lang==='ar'?'العضو':'Member'}</label><select id="ms-member" onchange="onManualSingleMemberChange(this.value)">
           <option value="">${STATE.lang==='ar'?'اختر عضوًا':'Select a member'}</option>
