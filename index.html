@@ -4898,6 +4898,20 @@ async function viewExecutiveReportAsync(roundId){
     if(!roundData.success){ content.innerHTML = `<div class="card card-pad"><b>${esc(roundData.error||'Round not found')}</b></div>`; return; }
     const round = roundData.round;
     const participants = (roundData.participants||[]).filter(Boolean);
+    // Fixed official sign-off list for the Executive Report/PDF only.
+    // This list must not change based on round participants or attendance.
+    const fixedSignoffMembers = [
+      {full_name:'Mr. Sami Awad Al Harbi', job_title:'Hospital Director'},
+      {full_name:'DR.FAHAD ALDHAFEERI', job_title:'Medical Director'},
+      {full_name:'Dr. shimaa Boyoumi', job_title:'Assistant Medical Director for Medical Services'},
+      {full_name:'Mr. Abdulellah Ayed Al Mutairi', job_title:'QM&PS Director'},
+      {full_name:'Ph. Mutlaq K. Al-Dhafeeri', job_title:'Pharmaceutical Care Department Head'},
+      {full_name:'Mr. Sabah Al-Harbi', job_title:'Director of Nursing'},
+      {full_name:'Ms. Noura Al Anizi', job_title:'Lab. and Blood Bank Department Head'},
+      {full_name:'Mr. Salman Al Otaibi', job_title:'Safety Officer Manager'},
+      {full_name:'Ms. Awatif Al Harbi', job_title:'IPCD Director'},
+      {full_name:'Mr. Mishari Fareed Al Shammari', job_title:'Risk Manager officer'}
+    ];
     const findings = (findingsData.success? findingsData.findings : []) || [];
     const approvedRemarks = findings.filter(f=>f.status!=='Rejected');
 
@@ -4961,16 +4975,11 @@ async function viewExecutiveReportAsync(roundId){
             </tr>
           </thead>
           <tbody>
-            ${participants.length ? participants.map(p=>{
-              const m = p.round_members || p;
-              return `<tr>
-                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;font-size:11.5px;">${esc(m.full_name||'—')}</td>
-                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;font-size:11.5px;">${esc(m.job_title||'—')}</td>
-                <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;"></td>
-              </tr>`;
-            }).join('') : `<tr>
-              <td colspan="3" style="border:1px solid #8fa6aa;padding:12px;text-align:center;font-size:11.5px;">${STATE.lang==='ar'?'لا يوجد أعضاء مرتبطون بهذه الجولة':'No members linked to this round'}</td>
-            </tr>`}
+            ${fixedSignoffMembers.map(m=>`<tr>
+              <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;font-size:11.5px;">${esc(m.full_name)}</td>
+              <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;font-size:11.5px;">${esc(m.job_title)}</td>
+              <td style="border:1px solid #8fa6aa;padding:9px 10px;height:48px;vertical-align:middle;text-align:center;"></td>
+            </tr>`).join('')}
           </tbody>
         </table>
       </div>
