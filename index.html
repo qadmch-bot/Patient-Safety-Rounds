@@ -380,6 +380,8 @@ const DEPARTMENTS = [
  {id:'PEDIAER', en:'Pediatric ER', ar:'طوارئ الأطفال'},
  {id:'PEDIAOPD', en:'Pediatric Outpatient Clinic', ar:'عيادة الأطفال الخارجية'},
  {id:'PHARMACY', en:'Pharmacy', ar:'الصيدلية'},
+ {id:'NURSING_ADMIN', en:'Nursing Administration', ar:'إدارة التمريض'},
+ {id:'MEDICAL_ADMIN', en:'Medical Administration', ar:'الإدارة الطبية'},
 ];
 // Additional responsible departments are managed by Quality and saved on this browser.
 // Existing departments and round scheduling remain unchanged.
@@ -399,14 +401,15 @@ function addResponsibleDepartment(){
  const select=document.getElementById('qa-dept');select.add(new Option(name,id));select.value=id;input.value='';
  toast('تمت إضافة القسم إلى قائمة الأقسام المسؤولة');
 }
-const DEPARTMENT_ID_ALIASES = {
-  'CUSTOM-1791374478259': {ar:'جناح الولادة 1', en:'Obstetrics Ward 1 (OBS-1)'}
-};
+const DEPARTMENT_ID_ALIASES = {};
 function deptName(id){
   const alias=DEPARTMENT_ID_ALIASES[String(id||'')];
   if(alias) return STATE.lang==='ar'?alias.ar:alias.en;
   const d=responsibleDepartments().find(x=>x.id===id);
-  if(!d) return id||'—';
+  if(!d){
+    if(String(id||'').startsWith('CUSTOM-')) return STATE.lang==='ar'?'قسم مضاف سابقًا — يحتاج تحديد الاسم':'Previously added department — name needs confirmation';
+    return id||'—';
+  }
   return STATE.lang==='ar'? d.ar : d.en;
 }
 function checklistItemName(value, domainId){
