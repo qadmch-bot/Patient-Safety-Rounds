@@ -4427,6 +4427,7 @@ async function submitPublicPlan(){
 }
 
 /* ---------------- QPS Observation Review (internal, real data) ---------------- */
+let QPS_OBS_CACHE = new Map();
 async function viewQpsReviewAsync(){
   const content = document.getElementById('content');
   content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
@@ -4434,6 +4435,7 @@ async function viewQpsReviewAsync(){
     const res = await fetch('/api/observations');
     const data = await res.json();
     const allRows = (data.success? data.observations : []) || [];
+    QPS_OBS_CACHE = new Map(allRows.map(o=>[String(o.id),o]));
     const rows = allRows.filter(o=>o.status!=='Deleted');
     const pending = rows.filter(o=>o.status==='Submitted for QPS Review');
     const managed = rows.filter(o=>o.status!=='Submitted for QPS Review');
@@ -4451,7 +4453,7 @@ async function viewQpsReviewAsync(){
       </div></div>
       <div class="btn-row" style="margin-top:10px;">
         ${isPending?`<button type="button" class="btn btn-primary btn-sm" onclick="openApproveObsModal('${o.id}')">✓ ${STATE.lang==='ar'?'اعتماد':'Approve'}</button><button type="button" class="btn btn-ghost btn-sm" onclick="openClarifyObsModal('${o.id}')">? ${STATE.lang==='ar'?'طلب توضيح':'Request Clarification'}</button><button type="button" class="btn btn-danger btn-sm" onclick="openRejectObsModal('${o.id}')">✕ ${STATE.lang==='ar'?'رفض':'Reject'}</button>`:''}
-        <button type="button" class="btn btn-ghost btn-sm" onclick="openEditObsModal('${o.id}',${JSON.stringify(o.observation_text||'')})">✎ ${STATE.lang==='ar'?'تعديل':'Edit'}</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="openEditObsModal('${o.id}')">✎ ${STATE.lang==='ar'?'تعديل':'Edit'}</button>
         ${!isPending?`<button type="button" class="btn btn-ghost btn-sm" onclick="reopenObservation('${o.id}')">↩ ${STATE.lang==='ar'?'استعادة للتعديل':'Reopen for editing'}</button>`:''}
         <button type="button" class="btn btn-danger btn-sm" onclick="deleteObservation('${o.id}')">🗑 ${STATE.lang==='ar'?'حذف':'Delete'}</button>
       </div></div>`;
@@ -4468,9 +4470,11 @@ async function viewQpsReviewAsync(){
     content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الملاحظات':'Could not load observations'}</b></div>`;
   }
 }
-function openEditObsModal(id,text){
+function openEditObsModal(id){
+  const o=QPS_OBS_CACHE.get(String(id));
+  if(!o){toast(STATE.lang==='ar'?'تعذر تحميل الملاحظة، اضغطي تحديث وحاولي مرة أخرى':'Observation could not be loaded. Refresh and try again.');return;}
   openModal(STATE.lang==='ar'?'تعديل الملاحظة':'Edit Observation',
-    `<div class="field"><label>${STATE.lang==='ar'?'نص الملاحظة':'Observation text'}</label><textarea id="qe-text" style="min-height:140px;">${esc(text)}</textarea></div>`,
+    `<div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><input value="${esc(domainName(o.domain))}" disabled></div><div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist item'}</label><input value="${esc(checklistItemName(o.checklist_item,o.domain))}" disabled></div><div class="field"><label>${STATE.lang==='ar'?'نص الملاحظة':'Observation text'}</label><textarea id="qe-text" style="min-height:180px;">${esc(o.observation_text||'')}</textarea></div>`,
     `<button type="button" class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button type="button" class="btn btn-primary" onclick="editObservation('${id}')">${STATE.lang==='ar'?'حفظ التعديل':'Save'}</button>`);
 }
 async function editObservation(id){
@@ -4971,6 +4975,20 @@ async function viewExecutiveReportAsync(roundId){
       }
     } catch(e){}
 
+    // Official DESCRIPTION wording from the August 2026 approved Safety Rounds form.
+    // Keep these descriptions fixed in the executive report; REMARKS come from the current round.
+    const officialReportDescriptions = {
+      QMPS: ['Patient Identification','Fall','Pressure Sores','Infusion Pump'],
+      PHARM: ['Room Temperature / Refrigerator Temperature / Expiration / High Alert Medication / LASA'],
+      LAB: ['Blood Transfusion (Reaction, Adverse Effect, Monitoring of OVR & Reaction Form)'],
+      FMS: ['RACE','PASS','Medical Gas'],
+      HR: ['Credentialing & Verification – Clinical Staff','Privileging – Medical Physician','Conscious Sedation'],
+      IPCD: ['Hand Washing/Hygiene','Donning & Doffing','Transmission-Based Precaution'],
+      NURSING: ['Documentation','Patient Safety (IV Site, Side Rails)','Staffing (RN – Patient Assignment)','Inventory Checking'],
+      MEDADMIN: ['Clinical Privileges','VTE','PROCEDURAL TIME OUT','SURGICAL SITE MARKING']
+    };
+    const reportDescription = d => (officialReportDescriptions[d.id]||[]).map(x=>esc(x)).join('<br>');
+
     const byDomain = {};
     DOMAINS.forEach(d=>{ byDomain[d.id] = approvedRemarks.filter(f=>f.domain===d.id); });
 
@@ -4993,11 +5011,11 @@ async function viewExecutiveReportAsync(roundId){
         <tr><td style="font-weight:700;">DEPARTMENT(S):</td><td colspan="3">${round.departments.map(deptName).join(' + ')}</td></tr>
         <tr><td style="font-weight:700;vertical-align:top;">ROUND MEMBERS:</td><td colspan="3">${participants.length? participants.map(p=>{const m=p.round_members||p;return esc(m.full_name||'—')+(m.job_title?' — '+esc(m.job_title):'');}).join(', ') : '—'}</td></tr>
       </tbody></table>
-      <table style="margin-bottom:14px;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th>DESCRIPTION / REMARKS</th></tr></thead><tbody>
-      ${DOMAINS.map(d=>{
+      <table style="margin-bottom:14px;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th style="width:30%;">DESCRIPTION</th><th>REMARKS</th></tr></thead><tbody>
+      ${DOMAINS.slice().sort((a,b)=>a.sn-b.sn).map(d=>{
         const items = byDomain[d.id];
-        const remark = items.length? items.map(f=>`<div style="margin-bottom:6px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(checklistItemName(f.checklist_item,f.domain))}</b>: ${esc(f.observation_text||'—')} <span class="muted">(${riskLabel(f.risk_level)})</span></div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
-        return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
+        const remark = items.length? items.map(f=>`<div style="margin-bottom:7px;white-space:normal;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
+        return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.3px;line-height:1.55;">${reportDescription(d)}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
       }).join('')}
       </tbody></table>
       <b style="font-size:12.5px;">Findings / Remarks &amp; Corrective Action Status</b>
