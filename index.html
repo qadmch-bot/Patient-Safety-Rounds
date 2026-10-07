@@ -5035,16 +5035,16 @@ async function viewExecutiveReportAsync(roundId){
         <tr><td style="font-weight:700;">DEPARTMENT(S):</td><td colspan="3">${round.departments.map(deptName).join(' + ')}</td></tr>
         <tr><td style="font-weight:700;vertical-align:top;">ROUND MEMBERS:</td><td colspan="3">${participants.length? participants.map(p=>{const m=p.round_members||p;return esc(m.full_name||'—')+(m.job_title?' — '+esc(m.job_title):'');}).join(', ') : '—'}</td></tr>
       </tbody></table>
-      <table class="executive-main-table" style="margin-bottom:14px;table-layout:fixed;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th style="width:32%;">DESCRIPTION</th><th>REMARKS</th></tr></thead><tbody>
+      <table class="executive-main-table" dir="ltr" style="margin-bottom:14px;table-layout:fixed;width:100%;"><thead><tr><th style="width:5%;">SN</th><th style="width:18%;">DOMAIN</th><th style="width:25%;">DESCRIPTION</th><th style="width:52%;">REMARKS</th></tr></thead><tbody>
       ${DOMAINS.slice().sort((a,b)=>a.sn-b.sn).map(d=>{
         const items = byDomain[d.id];
-        const remark = items.length? items.map(f=>`<div style="margin-bottom:7px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc(f.observation_text||'—')} <span class="muted">(${riskLabel(f.risk_level)})</span></div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
+        const remark = items.length? items.map(f=>`<div style="margin-bottom:7px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
         return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.5px;">${esc(AUGUST_DESCRIPTIONS[d.id]||'—')}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
       }).join('')}
       </tbody></table>
       <b style="font-size:12.5px;">Findings / Remarks &amp; Corrective Action Status</b>
-      <table class="executive-findings-table" style="margin:8px 0 14px;table-layout:fixed;"><thead><tr><th>Checklist Item</th><th>Observation / Remarks</th><th>Risk</th><th>Plan Status</th><th>QPS Review &amp; Approval</th></tr></thead><tbody>
-      ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(checklistItemName(f.checklist_item,f.domain))}</b></td><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</td><td>${riskLabel(f.risk_level)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):(STATE.lang==='ar'?'معتمد من الجودة':'QPS Approved')}</td></tr>`).join('') : `<tr><td colspan="5">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
+      <table class="executive-findings-table" dir="ltr" style="margin:8px 0 14px;table-layout:fixed;width:100%;"><thead><tr><th style="width:22%;">Checklist Item</th><th style="width:48%;">Observation / Remarks</th><th style="width:13%;">Plan Status</th><th style="width:17%;">QPS Review &amp; Approval</th></tr></thead><tbody>
+      ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(checklistItemName(f.checklist_item,f.domain))}</b></td><td style="font-size:11.5px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):(STATE.lang==='ar'?'معتمد من الجودة':'QPS Approved')}</td></tr>`).join('') : `<tr><td colspan="4">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
       </tbody></table>
       <div style="margin-top:14px;margin-bottom:14px;">
         <b>NEXT ROUND DATE:</b><br>${nextRoundLine}
