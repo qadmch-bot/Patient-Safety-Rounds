@@ -72,11 +72,14 @@ export default async function handler(req, res) {
         const linkedFindings = await sbGet("findings", `?observation_id=eq.${encodeURIComponent(obs.id)}`);
         const updated = await sbPatch("observations", `?id=eq.${encodeURIComponent(id)}`, patch);
         for (const finding of linkedFindings) {
+          // findings stores the link/classification only. The observation text lives in
+          // observations and is joined by observation_id when the report is built.
+          // Do NOT PATCH a non-existent findings.observation_text column.
           await sbPatch("findings", `?id=eq.${encodeURIComponent(finding.id)}`, {
             status: "Reopened",
             domain: patch.domain || obs.domain,
             checklist_item: patch.checklist_item || obs.checklist_item,
-            observation_text: patch.observation_text || obs.observation_text,
+            updated_at: new Date().toISOString(),
           });
         }
         await logAudit({ action: "Observation Edited and Reopened", entity_type: "observation", entity_id: id, actor: patch.qps_reviewer, previous_value: obs, new_value: patch });
@@ -113,7 +116,14 @@ export default async function handler(req, res) {
           };
           const restoredObs = await sbPatch("observations", `?id=eq.${encodeURIComponent(id)}`, restoredObsPatch);
           const restoredFinding = await sbPatch("findings", `?id=eq.${encodeURIComponent(existingFinding.id)}`, {
-            status:"Approved", risk_level:restoredObsPatch.risk_level, responsible_department:restoredObsPatch.responsible_department, department:restoredObsPatch.responsible_department, responsible_person:restoredObsPatch.responsible_person
+            status:"Approved",
+            domain: obs.domain,
+            checklist_item: obs.checklist_item,
+            risk_level:restoredObsPatch.risk_level,
+            responsible_department:restoredObsPatch.responsible_department,
+            department:restoredObsPatch.responsible_department,
+            responsible_person:restoredObsPatch.responsible_person,
+            updated_at:new Date().toISOString()
           });
           await logAudit({ action:"Observation Re-approved", entity_type:"observation", entity_id:id, actor:restoredObsPatch.qps_reviewer, previous_value:obs, new_value:restoredObsPatch });
           return res.status(200).json({ success:true, observation:restoredObs[0], finding:restoredFinding[0], plan:existingPlans[0]||null, whatsapp:{success:true,skipped:true,reason:"Existing finding restored; duplicate notification prevented."}, recurring:!!existingFinding.is_recurring });
