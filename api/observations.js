@@ -59,11 +59,28 @@ export default async function handler(req, res) {
       }
 
       if (decision === "edit") {
-        const patch = { updated_at: new Date().toISOString() };
+        const patch = {
+          updated_at: new Date().toISOString(),
+          status: "Submitted for QPS Review",
+          qps_reviewer: b.qps_reviewer || "Quality Reviewer",
+          qps_decision_notes: "Edited by QPS and returned for review",
+          qps_decision_at: new Date().toISOString(),
+        };
         if (b.edited_text) patch.observation_text = b.edited_text;
+        if (b.domain) patch.domain = b.domain;
+        if (b.checklist_item) patch.checklist_item = b.checklist_item;
+        const linkedFindings = await sbGet("findings", `?observation_id=eq.${encodeURIComponent(obs.id)}`);
         const updated = await sbPatch("observations", `?id=eq.${encodeURIComponent(id)}`, patch);
-        await logAudit({ action: "Observation Edited", entity_type: "observation", entity_id: id, actor: b.qps_reviewer, new_value: patch });
-        return res.status(200).json({ success: true, observation: updated[0] });
+        for (const finding of linkedFindings) {
+          await sbPatch("findings", `?id=eq.${encodeURIComponent(finding.id)}`, {
+            status: "Reopened",
+            domain: patch.domain || obs.domain,
+            checklist_item: patch.checklist_item || obs.checklist_item,
+            observation_text: patch.observation_text || obs.observation_text,
+          });
+        }
+        await logAudit({ action: "Observation Edited and Reopened", entity_type: "observation", entity_id: id, actor: patch.qps_reviewer, previous_value: obs, new_value: patch });
+        return res.status(200).json({ success: true, observation: updated[0], linked_findings: linkedFindings.length });
       }
 
       if (decision === "reject" || decision === "clarify") {

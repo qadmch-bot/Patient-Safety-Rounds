@@ -285,6 +285,11 @@ tbody tr:last-child td{border-bottom:none;}
 .chip-list{display:flex; gap:6px; flex-wrap:wrap;}
 .chip{background:var(--teal-50); border:1px solid var(--teal-100); color:var(--teal-800); padding:3px 9px; border-radius:20px; font-size:11px; font-weight:700;}
 hr.sep{border:none; border-top:1px solid var(--line-soft); margin:16px 0;}
+
+/* Executive report: centered, print-ready hospital table content */
+.executive-main-table th,.executive-main-table td,.executive-findings-table th,.executive-findings-table td{ text-align:center !important; vertical-align:middle !important; line-height:1.55; }
+.executive-main-table td div,.executive-findings-table td div{ text-align:center !important; }
+@media print{.executive-main-table th,.executive-main-table td,.executive-findings-table th,.executive-findings-table td{ text-align:center !important;vertical-align:middle !important; }}
 </style>
 </head>
 <body>
@@ -4427,7 +4432,6 @@ async function submitPublicPlan(){
 }
 
 /* ---------------- QPS Observation Review (internal, real data) ---------------- */
-let QPS_OBS_CACHE = new Map();
 async function viewQpsReviewAsync(){
   const content = document.getElementById('content');
   content.innerHTML = `<div class="empty">${STATE.lang==='ar'?'جارٍ التحميل...':'Loading…'}</div>`;
@@ -4435,7 +4439,6 @@ async function viewQpsReviewAsync(){
     const res = await fetch('/api/observations');
     const data = await res.json();
     const allRows = (data.success? data.observations : []) || [];
-    QPS_OBS_CACHE = new Map(allRows.map(o=>[String(o.id),o]));
     const rows = allRows.filter(o=>o.status!=='Deleted');
     const pending = rows.filter(o=>o.status==='Submitted for QPS Review');
     const managed = rows.filter(o=>o.status!=='Submitted for QPS Review');
@@ -4470,18 +4473,40 @@ async function viewQpsReviewAsync(){
     content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الملاحظات':'Could not load observations'}</b></div>`;
   }
 }
+let EDITING_OBSERVATION = null;
+function editDomainOptions(selected){
+  return DOMAINS.slice().sort((a,b)=>a.sn-b.sn).map(d=>`<option value="${d.id}" ${d.id===selected?'selected':''}>${d.sn}. ${STATE.lang==='ar'?d.ar:d.en}</option>`).join('');
+}
+function editChecklistOptions(domainId, selectedRaw){
+  const d=DOMAINS.find(x=>x.id===domainId); if(!d) return '';
+  const selected=String(selectedRaw||'').split(/\s*\|\s*|\s*,\s*/).filter(Boolean);
+  return d.items.map(i=>`<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 8px;border:1px solid var(--line);border-radius:7px;margin-bottom:6px;cursor:pointer;"><input type="checkbox" class="qe-item" value="${i.id}" ${selected.includes(i.id)?'checked':''} style="margin-top:3px;"> <span>${STATE.lang==='ar'?i.ar:i.en}</span></label>`).join('');
+}
+function refreshEditChecklist(){
+  const domainId=document.getElementById('qe-domain')?.value;
+  const box=document.getElementById('qe-checklist'); if(box) box.innerHTML=editChecklistOptions(domainId,'');
+}
 function openEditObsModal(id){
-  const o=QPS_OBS_CACHE.get(String(id));
-  if(!o){toast(STATE.lang==='ar'?'تعذر تحميل الملاحظة، اضغطي تحديث وحاولي مرة أخرى':'Observation could not be loaded. Refresh and try again.');return;}
-  openModal(STATE.lang==='ar'?'تعديل الملاحظة':'Edit Observation',
-    `<div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><input value="${esc(domainName(o.domain))}" disabled></div><div class="field"><label>${STATE.lang==='ar'?'بند التدقيق':'Checklist item'}</label><input value="${esc(checklistItemName(o.checklist_item,o.domain))}" disabled></div><div class="field"><label>${STATE.lang==='ar'?'نص الملاحظة':'Observation text'}</label><textarea id="qe-text" style="min-height:180px;">${esc(o.observation_text||'')}</textarea></div>`,
-    `<button type="button" class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button type="button" class="btn btn-primary" onclick="editObservation('${id}')">${STATE.lang==='ar'?'حفظ التعديل':'Save'}</button>`);
+  fetch('/api/observations').then(r=>r.json()).then(data=>{
+    const o=((data&&data.observations)||[]).find(x=>String(x.id)===String(id));
+    if(!o){toast(STATE.lang==='ar'?'تعذر تحميل الملاحظة':'Could not load observation');return;}
+    EDITING_OBSERVATION=o;
+    openModal(STATE.lang==='ar'?'تعديل الملاحظة':'Edit Observation',
+      `<div class="field"><label>${STATE.lang==='ar'?'المجال':'Domain'}</label><select id="qe-domain" onchange="refreshEditChecklist()">${editDomainOptions(o.domain)}</select></div>
+       <div class="field"><label>${STATE.lang==='ar'?'بند التدقيق — يمكن اختيار أكثر من بند':'Checklist item(s) — multiple selections allowed'}</label><div id="qe-checklist" style="max-height:190px;overflow:auto;padding:4px;">${editChecklistOptions(o.domain,o.checklist_item)}</div></div>
+       <div class="field"><label>${STATE.lang==='ar'?'نص الملاحظة':'Observation text'}</label><textarea id="qe-text" style="min-height:170px;">${esc(o.observation_text||'')}</textarea></div>
+       <div class="hint">${STATE.lang==='ar'?'بعد حفظ أي تعديل تعود الملاحظة تلقائيًا إلى انتظار مراجعة الجودة، ولا تظهر كمعتمدة في التقرير حتى اعتمادها من جديد.':'After editing, the observation returns to QPS review and must be approved again before the final report.'}</div>`,
+      `<button type="button" class="btn btn-ghost" onclick="closeModal()">${STATE.lang==='ar'?'إلغاء':'Cancel'}</button><button type="button" class="btn btn-primary" onclick="editObservation('${id}')">${STATE.lang==='ar'?'حفظ التعديل':'Save Changes'}</button>`);
+  }).catch(()=>toast(STATE.lang==='ar'?'تعذر تحميل الملاحظة':'Could not load observation'));
 }
 async function editObservation(id){
   const edited_text=(document.getElementById('qe-text')?.value||'').trim();
+  const domain=document.getElementById('qe-domain')?.value||'';
+  const checklist_item=[...document.querySelectorAll('.qe-item:checked')].map(x=>x.value).join(' | ');
   if(!edited_text){toast(STATE.lang==='ar'?'نص الملاحظة مطلوب':'Observation text is required');return;}
-  const res=await fetch('/api/observations?id='+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision:'edit',edited_text,qps_reviewer:currentActorName()})});
-  const data=await res.json(); if(!res.ok||!data.success){toast(data.error||'Failed');return;} closeModal(); toast(STATE.lang==='ar'?'تم تعديل الملاحظة':'Observation updated'); viewQpsReviewAsync();
+  if(!domain||!checklist_item){toast(STATE.lang==='ar'?'اختاري المجال وبند تدقيق واحدًا على الأقل':'Select a domain and at least one checklist item');return;}
+  const res=await fetch('/api/observations?id='+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision:'edit',edited_text,domain,checklist_item,qps_reviewer:currentActorName()})});
+  const data=await res.json(); if(!res.ok||!data.success){toast(data.error||'Failed');return;} closeModal(); toast(STATE.lang==='ar'?'تم حفظ التعديل وإعادة الملاحظة للمراجعة':'Changes saved and observation returned to review'); viewQpsReviewAsync();
 }
 async function reopenObservation(id){
   if(!confirm(STATE.lang==='ar'?'إعادة هذه الملاحظة إلى انتظار المراجعة؟ لن تُعتبر معتمدة حتى اعتمادها من جديد.':'Reopen this observation for QPS review?')) return;
@@ -4975,20 +5000,16 @@ async function viewExecutiveReportAsync(roundId){
       }
     } catch(e){}
 
-    // Official DESCRIPTION wording from the August 2026 approved Safety Rounds form.
-    // Keep these descriptions fixed in the executive report; REMARKS come from the current round.
-    const officialReportDescriptions = {
-      QMPS: ['Patient Identification','Fall','Pressure Sores','Infusion Pump'],
-      PHARM: ['Room Temperature / Refrigerator Temperature / Expiration / High Alert Medication / LASA'],
-      LAB: ['Blood Transfusion (Reaction, Adverse Effect, Monitoring of OVR & Reaction Form)'],
-      FMS: ['RACE','PASS','Medical Gas'],
-      HR: ['Credentialing & Verification – Clinical Staff','Privileging – Medical Physician','Conscious Sedation'],
-      IPCD: ['Hand Washing/Hygiene','Donning & Doffing','Transmission-Based Precaution'],
-      NURSING: ['Documentation','Patient Safety (IV Site, Side Rails)','Staffing (RN – Patient Assignment)','Inventory Checking'],
-      MEDADMIN: ['Clinical Privileges','VTE','PROCEDURAL TIME OUT','SURGICAL SITE MARKING']
+    const AUGUST_DESCRIPTIONS = {
+      QMPS:'Patient Identification • Fall • Pressure Sores • Infusion Pump',
+      PHARM:'Room Temperature / Refrigerator Temperature / Expiration / High Alert Medication / LASA',
+      LAB:'Blood Transfusion (Reaction, Adverse Effect, Monitoring of OVR & Reaction Form)',
+      FMS:'RACE • PASS • Medical Gas',
+      HR:'Credentialing & Verification – Clinical Staff • Privileging – Medical Physician • Conscious Sedation',
+      IPCD:'Hand Washing/Hygiene • Donning & Doffing • Transmission-Based Precaution',
+      NURSING:'Documentation • Patient Safety (IV Site, Side Rails) • Staffing (RN – Patient Assignment) • Inventory Checking',
+      MEDADMIN:'Clinical Privileges • VTE • Procedural Time Out • Surgical Site Marking'
     };
-    const reportDescription = d => (officialReportDescriptions[d.id]||[]).map(x=>esc(x)).join('<br>');
-
     const byDomain = {};
     DOMAINS.forEach(d=>{ byDomain[d.id] = approvedRemarks.filter(f=>f.domain===d.id); });
 
@@ -5011,15 +5032,15 @@ async function viewExecutiveReportAsync(roundId){
         <tr><td style="font-weight:700;">DEPARTMENT(S):</td><td colspan="3">${round.departments.map(deptName).join(' + ')}</td></tr>
         <tr><td style="font-weight:700;vertical-align:top;">ROUND MEMBERS:</td><td colspan="3">${participants.length? participants.map(p=>{const m=p.round_members||p;return esc(m.full_name||'—')+(m.job_title?' — '+esc(m.job_title):'');}).join(', ') : '—'}</td></tr>
       </tbody></table>
-      <table style="margin-bottom:14px;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th style="width:30%;">DESCRIPTION</th><th>REMARKS</th></tr></thead><tbody>
+      <table class="executive-main-table" style="margin-bottom:14px;table-layout:fixed;"><thead><tr><th style="width:6%;">SN</th><th style="width:22%;">DOMAIN</th><th style="width:32%;">DESCRIPTION</th><th>REMARKS</th></tr></thead><tbody>
       ${DOMAINS.slice().sort((a,b)=>a.sn-b.sn).map(d=>{
         const items = byDomain[d.id];
-        const remark = items.length? items.map(f=>`<div style="margin-bottom:7px;white-space:normal;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
-        return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.3px;line-height:1.55;">${reportDescription(d)}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
+        const remark = items.length? items.map(f=>`<div style="margin-bottom:7px;white-space:pre-wrap;overflow-wrap:anywhere;">${esc(f.observation_text||'—')} <span class="muted">(${riskLabel(f.risk_level)})</span></div>`).join('') : (STATE.lang==='ar'?'لا توجد ملاحظات':'No findings');
+        return `<tr><td>${d.sn}</td><td>${STATE.lang==='ar'?d.ar:d.en}</td><td style="font-size:11.5px;">${esc(AUGUST_DESCRIPTIONS[d.id]||'—')}</td><td style="font-size:11.5px;">${remark}</td></tr>`;
       }).join('')}
       </tbody></table>
       <b style="font-size:12.5px;">Findings / Remarks &amp; Corrective Action Status</b>
-      <table style="margin:8px 0 14px;"><thead><tr><th>Checklist Item</th><th>Observation / Remarks</th><th>Risk</th><th>Plan Status</th><th>QPS Review &amp; Approval</th></tr></thead><tbody>
+      <table class="executive-findings-table" style="margin:8px 0 14px;table-layout:fixed;"><thead><tr><th>Checklist Item</th><th>Observation / Remarks</th><th>Risk</th><th>Plan Status</th><th>QPS Review &amp; Approval</th></tr></thead><tbody>
       ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(checklistItemName(f.checklist_item,f.domain))}</b></td><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</td><td>${riskLabel(f.risk_level)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):(STATE.lang==='ar'?'معتمد من الجودة':'QPS Approved')}</td></tr>`).join('') : `<tr><td colspan="5">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
       </tbody></table>
       <div style="margin-top:14px;margin-bottom:14px;">
