@@ -4435,39 +4435,35 @@ async function viewQpsReviewAsync(){
     const data = await res.json();
     const allRows = (data.success? data.observations : []) || [];
     const rows = allRows.filter(o=>o.status!=='Deleted');
-    const pendingCount = rows.filter(o=>o.status==='Submitted for QPS Review').length;
-    const byDept = {};
-    rows.forEach(o=>{ (byDept[o.department]=byDept[o.department]||[]).push(o); });
+    const pending = rows.filter(o=>o.status==='Submitted for QPS Review');
+    const managed = rows.filter(o=>o.status!=='Submitted for QPS Review');
     const statusLabel=o=>({
       'Submitted for QPS Review':STATE.lang==='ar'?'بانتظار المراجعة':'Awaiting review',
       'Approved':STATE.lang==='ar'?'معتمدة':'Approved',
       'Rejected':STATE.lang==='ar'?'مرفوضة':'Rejected',
       'Clarification Requested':STATE.lang==='ar'?'طلب توضيح':'Clarification requested'
     }[o.status]||o.status||'—');
+    const card=(o,isPending)=>`<div class="checklist-item" style="margin-bottom:10px;">
+      <div class="ci-top"><div style="width:100%;"><div class="ci-title">${domainName(o.domain)} — ${esc(checklistItemName(o.checklist_item,o.domain))}</div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap;"><span class="badge ${o.status==='Approved'?'b-green':o.status==='Rejected'?'b-red':o.status==='Clarification Requested'?'b-orange':'b-blue'}">${esc(statusLabel(o))}</span><span class="muted">${esc(o.round_id||'')}</span></div>
+        <div style="font-size:13px;line-height:1.8;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--teal-50);padding:10px 12px;border-radius:8px;"><b>${STATE.lang==='ar'?'نص الملاحظة كاملًا:':'Full observation:'}</b><br>${esc(o.observation_text)}</div>
+        <div class="muted" style="font-size:10.8px;margin-top:4px;">${STATE.lang==='ar'?'مقدّم من':'Submitted by'} ${esc(o.member_name||'—')} (${esc(o.member_role||'—')}) · ${o.submitted_at?fmtDateTime(new Date(o.submitted_at)):'—'}</div>
+      </div></div>
+      <div class="btn-row" style="margin-top:10px;">
+        ${isPending?`<button type="button" class="btn btn-primary btn-sm" onclick="openApproveObsModal('${o.id}')">✓ ${STATE.lang==='ar'?'اعتماد':'Approve'}</button><button type="button" class="btn btn-ghost btn-sm" onclick="openClarifyObsModal('${o.id}')">? ${STATE.lang==='ar'?'طلب توضيح':'Request Clarification'}</button><button type="button" class="btn btn-danger btn-sm" onclick="openRejectObsModal('${o.id}')">✕ ${STATE.lang==='ar'?'رفض':'Reject'}</button>`:''}
+        <button type="button" class="btn btn-ghost btn-sm" onclick="openEditObsModal('${o.id}',${JSON.stringify(o.observation_text||'')})">✎ ${STATE.lang==='ar'?'تعديل':'Edit'}</button>
+        ${!isPending?`<button type="button" class="btn btn-ghost btn-sm" onclick="reopenObservation('${o.id}')">↩ ${STATE.lang==='ar'?'استعادة للتعديل':'Reopen for editing'}</button>`:''}
+        <button type="button" class="btn btn-danger btn-sm" onclick="deleteObservation('${o.id}')">🗑 ${STATE.lang==='ar'?'حذف':'Delete'}</button>
+      </div></div>`;
     content.innerHTML = `
-    <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${STATE.lang==='ar'?'مراجعة ملاحظات الجولة':'QPS Observation Review'}</h1><div class="sub">${rows.length} ${STATE.lang==='ar'?'ملاحظة محفوظة — منها '+pendingCount+' بانتظار المراجعة':`saved observations — ${pendingCount} awaiting review`}</div></div>
+    <div class="pagehead"><div><div class="crumb">${STATE.lang==='ar'?'مباشر':'Live'}</div><h1>${STATE.lang==='ar'?'مراجعة ملاحظات الجولة':'QPS Observation Review'}</h1><div class="sub">${rows.length} ${STATE.lang==='ar'?'ملاحظة محفوظة — منها '+pending.length+' بانتظار المراجعة':`saved observations — ${pending.length} awaiting review`}</div></div>
     <button type="button" class="btn btn-ghost btn-sm" onclick="go('qps-review')">↻ ${STATE.lang==='ar'?'تحديث':'Refresh'}</button></div>
-    ${!rows.length? `<div class="card"><div class="empty"><div class="eic">✅</div>${STATE.lang==='ar'?'لا توجد ملاحظات مسجلة':'No saved observations'}</div></div>` :
-    Object.keys(byDept).sort().map(dept=>`
-      <div class="card" style="margin-bottom:16px;">
-        <div class="card-head"><h3>${deptName(dept)}</h3><span class="hint">${byDept[dept].length} ${STATE.lang==='ar'?'ملاحظة':'observation(s)'}</span></div>
-        <div class="card-pad">
-        ${byDept[dept].map(o=>`
-          <div class="checklist-item">
-            <div class="ci-top"><div style="width:100%;"><div class="ci-title">${domainName(o.domain)} — ${esc(checklistItemName(o.checklist_item,o.domain))}</div>
-              <div style="display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap;"><span class="badge ${o.status==='Approved'?'b-green':o.status==='Rejected'?'b-red':o.status==='Clarification Requested'?'b-orange':'b-blue'}">${esc(statusLabel(o))}</span><span class="muted">${esc(o.round_id||'')}</span></div>
-              <div style="font-size:13px;line-height:1.8;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--teal-50);padding:10px 12px;border-radius:8px;"><b>${STATE.lang==='ar'?'نص الملاحظة كاملًا:':'Full observation:'}</b><br>${esc(o.observation_text)}</div>
-              <div class="muted" style="font-size:10.8px;margin-top:4px;">${STATE.lang==='ar'?'مقدّم من':'Submitted by'} ${esc(o.member_name||'—')} (${esc(o.member_role||'—')}) · ${o.submitted_at?fmtDateTime(new Date(o.submitted_at)):'—'}</div>
-            </div></div>
-            <div class="btn-row" style="margin-top:10px;">
-              ${o.status==='Submitted for QPS Review'?`<button type="button" class="btn btn-primary btn-sm" onclick="openApproveObsModal('${o.id}')">✓ ${STATE.lang==='ar'?'اعتماد':'Approve'}</button><button type="button" class="btn btn-ghost btn-sm" onclick="openClarifyObsModal('${o.id}')">? ${STATE.lang==='ar'?'طلب توضيح':'Request Clarification'}</button><button type="button" class="btn btn-danger btn-sm" onclick="openRejectObsModal('${o.id}')">✕ ${STATE.lang==='ar'?'رفض':'Reject'}</button>`:''}
-              <button type="button" class="btn btn-ghost btn-sm" onclick="openEditObsModal('${o.id}',${JSON.stringify(o.observation_text||'')})">✎ ${STATE.lang==='ar'?'تعديل':'Edit'}</button>
-              ${o.status!=='Submitted for QPS Review'?`<button type="button" class="btn btn-ghost btn-sm" onclick="reopenObservation('${o.id}')">↩ ${STATE.lang==='ar'?'إعادة للمراجعة':'Reopen'}</button>`:''}
-              <button type="button" class="btn btn-danger btn-sm" onclick="deleteObservation('${o.id}')">🗑 ${STATE.lang==='ar'?'حذف':'Delete'}</button>
-            </div>
-          </div>`).join('')}
-        </div>
-      </div>`).join('')}`;
+    <div class="card" style="margin-bottom:16px;border:2px solid var(--teal-300);"><div class="card-head"><h3>${STATE.lang==='ar'?'بانتظار المراجعة — تعديل / حذف / اعتماد / توضيح / رفض':'Awaiting QPS Review'}</h3><span class="hint">${pending.length}</span></div><div class="card-pad">
+      ${pending.length?pending.map(o=>card(o,true)).join(''):`<div class="empty"><div class="eic">✅</div>${STATE.lang==='ar'?'لا توجد ملاحظات بانتظار المراجعة':'No observations awaiting review'}</div>`}
+    </div></div>
+    <div class="card"><div class="card-head"><h3>${STATE.lang==='ar'?'الملاحظات التي تمت مراجعتها — إدارة وتصحيح':'Reviewed Observations — Manage & Correct'}</h3><span class="hint">${managed.length}</span></div><div class="card-pad">
+      ${managed.length?managed.map(o=>card(o,false)).join(''):`<div class="empty">${STATE.lang==='ar'?'لا توجد ملاحظات تمت مراجعتها':'No reviewed observations'}</div>`}
+    </div></div>`;
   } catch(error){
     content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر تحميل الملاحظات':'Could not load observations'}</b></div>`;
   }
@@ -5005,8 +5001,8 @@ async function viewExecutiveReportAsync(roundId){
       }).join('')}
       </tbody></table>
       <b style="font-size:12.5px;">Findings / Remarks &amp; Corrective Action Status</b>
-      <table style="margin:8px 0 14px;"><thead><tr><th>Checklist Item</th><th>Observation / Remarks</th><th>Department</th><th>Risk</th><th>Plan Status</th><th>QPS Review &amp; Approval</th></tr></thead><tbody>
-      ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(checklistItemName(f.checklist_item,f.domain))}</b></td><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</td><td>${deptName(f.responsible_department||f.department)}</td><td>${riskLabel(f.risk_level)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):(STATE.lang==='ar'?'معتمد من الجودة':'QPS Approved')}</td></tr>`).join('') : `<tr><td colspan="6">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
+      <table style="margin:8px 0 14px;"><thead><tr><th>Checklist Item</th><th>Observation / Remarks</th><th>Risk</th><th>Plan Status</th><th>QPS Review &amp; Approval</th></tr></thead><tbody>
+      ${approvedRemarks.length? approvedRemarks.map(f=>`<tr><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;"><b>${esc(checklistItemName(f.checklist_item,f.domain))}</b></td><td style="font-size:11.5px;white-space:normal;overflow-wrap:anywhere;">${esc(f.observation_text||'—')}</td><td>${riskLabel(f.risk_level)}</td><td>${f.plan?esc(f.plan.status):'—'}</td><td>${f.plan&&f.plan.verification_result?esc(f.plan.verification_result):(STATE.lang==='ar'?'معتمد من الجودة':'QPS Approved')}</td></tr>`).join('') : `<tr><td colspan="5">${STATE.lang==='ar'?'لا توجد ملاحظات معتمدة':'No approved findings'}</td></tr>`}
       </tbody></table>
       <div style="margin-top:14px;margin-bottom:14px;">
         <b>NEXT ROUND DATE:</b><br>${nextRoundLine}
