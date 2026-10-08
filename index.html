@@ -292,6 +292,17 @@ hr.sep{border:none; border-top:1px solid var(--line-soft); margin:16px 0;}
 .executive-main-table th,.executive-findings-table th{border:1.2px solid #789398 !important;}
 .executive-main-table td div,.executive-findings-table td div{ text-align:center !important; }
 @media print{.executive-main-table th,.executive-main-table td,.executive-findings-table th,.executive-findings-table td{ text-align:center !important;vertical-align:middle !important; }}
+/* Chrome 131+ print margin boxes: page numbering independent of browser headers/footers. */
+@page {
+  size: A4 portrait;
+  margin: 14mm 13mm 19mm 13mm;
+  @bottom-right {
+    content: "Page " counter(page) " of " counter(pages);
+    font-family: Arial, sans-serif;
+    font-size: 9pt;
+    color: #334a50;
+  }
+}
 /* Print: preserve the entire official sign-off block on a dedicated page. */
 .executive-signoff-section{break-inside:avoid;page-break-inside:avoid;}
 @media print{
