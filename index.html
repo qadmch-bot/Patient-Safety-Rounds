@@ -542,6 +542,7 @@ const VERIFICATION_RESULT_AR = {'Effective':'فعّالة','Partially Effective'
 let ROUNDS = [];
 let OBSERVATIONS = [];
 let PLANS = [];
+let OVERDUE_DISMISSED = new Set();
 
 // link plans back onto observations
 OBSERVATIONS.forEach(o=>{ o.planId = (PLANS.find(p=>p.obsId===o.id)||{}).id || null; });
@@ -1308,7 +1309,7 @@ function navConfig(){
   if(STATE.role==='quality') groups.push({label:{en:'System',ar:'النظام'}, items:[{view:'admin', ic:'⚙️', label:'admin'}]});
   return groups;
 }
-function overdueCount(){ return PLANS.filter(p=>!['Closed'].includes(p.status) && deadlineInfo(p.targetDate,p.status).overdueDays>0).length; }
+function overdueCount(){ return PLANS.filter(p=>!['Closed'].includes(p.status) && !OVERDUE_DISMISSED.has(String(p.id)) && deadlineInfo(p.targetDate,p.status).overdueDays>0).length; }
 
 /* ---------------------------- RENDER SHELL ---------------------------- */
 function renderShell(){
@@ -1693,7 +1694,8 @@ function apiPlanToLocal(p, finding){
 }
 async function loadLiveOperationalData(){
   try{
-    const res=await fetch('/api/findings',{cache:'no-store'});
+    const [res, dismissedRes]=await Promise.all([fetch('/api/findings',{cache:'no-store'}),fetch('/api/plans?overdue_dismissals=1',{cache:'no-store'})]);
+    if(dismissedRes.ok){const dismissedData=await dismissedRes.json(); OVERDUE_DISMISSED=new Set((dismissedData.ids||[]).map(String));}
     const data=await res.json();
     if(!res.ok||!data.success) throw new Error(data.error||'Could not load findings');
     const findings=data.findings||[];
@@ -2826,7 +2828,7 @@ function filterPlanFollowup(){
 /* ================= APPROVED HOSPITAL IMPROVEMENT PLAN FORM (TEMPLATE) ================= */
 function viewOverdue(){
   const order = {Critical:0,High:1,Moderate:2,Low:3};
-  let rows = PLANS.filter(p=>!['Closed'].includes(p.status)).map(p=>({p, o:obsById(p.obsId), info:deadlineInfo(p.targetDate,p.status)})).filter(x=>x.info.overdueDays>0);
+  let rows = PLANS.filter(p=>!['Closed'].includes(p.status) && !OVERDUE_DISMISSED.has(String(p.id))).map(p=>({p, o:obsById(p.obsId), info:deadlineInfo(p.targetDate,p.status)})).filter(x=>x.info.overdueDays>0);
   if(STATE.role==='department') rows = rows.filter(x=>x.p.respDept===STATE.myDept);
   rows.sort((a,b)=> (order[a.o.risk]-order[b.o.risk]) || (b.info.overdueDays-a.info.overdueDays));
   return `
@@ -2836,15 +2838,31 @@ function viewOverdue(){
       <th>${STATE.lang==='ar'?'رقم الملاحظة':'Observation ID'}</th><th>${STATE.lang==='ar'?'القسم':'Dept'}</th><th>${STATE.lang==='ar'?'المجال':'Domain'}</th>
       <th>${STATE.lang==='ar'?'الملاحظة':'Observation'}</th><th>${STATE.lang==='ar'?'المسؤول':'Responsible'}</th><th>${STATE.lang==='ar'?'المستهدف':'Target'}</th>
       <th>${STATE.lang==='ar'?'التأخر':'Overdue'}</th><th>${STATE.lang==='ar'?'الخطورة':'Risk'}</th><th>${STATE.lang==='ar'?'الحالة':'Status'}</th><th>${STATE.lang==='ar'?'التصعيد':'Escalation'}</th>
+      ${STATE.role==='quality'?`<th>${STATE.lang==='ar'?'إجراء':'Action'}</th>`:''}
     </tr></thead><tbody>
     ${rows.length? rows.map(({p,o,info})=>{ const tier=escalationTier(info.overdueDays,o.risk); return `<tr>
       <td class="tbl-link" onclick="go('obs-detail',{id:'${o.id}'})">${o.id}</td><td>${deptName(o.dept)}</td><td>${domainName(o.domain)}</td>
       <td>${esc(o.text.slice(0,50))}…</td><td>${esc(p.respPerson)}</td><td class="nowrap">${fmtDate(p.targetDate)}</td>
       <td><span class="badge b-red">${info.overdueDays}d</span></td><td>${riskBadge(o.risk)}</td><td>${planStatusBadge(p.status)}</td>
       <td><span class="badge ${tier.cls}">${STATE.lang==='ar'?tier.ar:tier.en}</span></td>
-    </tr>`; }).join('') : `<tr><td colspan="10"><div class="empty"><div class="eic">✅</div>${STATE.lang==='ar'?'لا توجد إجراءات متأخرة':'No overdue actions'}</div></td></tr>`}
+      ${STATE.role==='quality'?`<td><button type="button" class="btn btn-danger btn-sm" onclick="dismissOverdueAction('${p.id}')">🗑 ${STATE.lang==='ar'?'حذف من المتأخرة':'Remove'}</button></td>`:''}
+    </tr>`; }).join('') : `<tr><td colspan="${STATE.role==='quality'?11:10}"><div class="empty"><div class="eic">✅</div>${STATE.lang==='ar'?'لا توجد إجراءات متأخرة':'No overdue actions'}</div></td></tr>`}
     </tbody></table></div>
   </div>`;
+}
+
+async function dismissOverdueAction(id){
+  if(STATE.role!=='quality') return;
+  const reason=prompt(STATE.lang==='ar'?'سبب إزالة الإجراء من قائمة المتأخرة (إلزامي). الملاحظة والخطة الأصلية ستبقيان محفوظتين.':'Reason for removing this action from the overdue list (required). The original finding and plan remain intact.');
+  if(reason===null)return;
+  if(!reason.trim()){toast(STATE.lang==='ar'?'سبب الإزالة مطلوب':'Reason is required');return;}
+  if(!confirm(STATE.lang==='ar'?'تأكيد إزالة هذا الإجراء من قائمة المتأخرة فقط؟ لن تُحذف الملاحظة أو الخطة الأصلية.':'Remove from overdue list only? The original observation and plan will remain.'))return;
+  try{
+    const res=await fetch('/api/plans?id='+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'dismiss_overdue',actor:currentActorName(),reason:reason.trim()})});
+    const data=await res.json(); if(!res.ok||!data.success)throw Error(data.error||'Save failed');
+    OVERDUE_DISMISSED.add(String(id));renderShell();render();
+    toast(STATE.lang==='ar'?'تمت الإزالة من قائمة المتأخرة مع تسجيل السبب':'Removed from overdue list and logged');
+  }catch(e){toast(e.message);}
 }
 
 /* ================= RECURRING FINDINGS ================= */

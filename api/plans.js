@@ -54,6 +54,10 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "GET") {
+      if (req.query.overdue_dismissals === "1") {
+        const entries = await sbGet("audit_trail", "?action=eq.Overdue%20Action%20Dismissed&entity_type=eq.plan&select=entity_id&order=created_at.desc");
+        return res.status(200).json({success:true, ids:[...new Set(entries.map(e=>String(e.entity_id)))]});
+      }
       if (req.query.id) {
         const plans = await sbGet("improvement_plans", `?id=eq.${encodeURIComponent(req.query.id)}`);
         if (!plans.length) return res.status(404).json({ success: false, error: "Plan not found." });
@@ -97,6 +101,15 @@ export default async function handler(req, res) {
 
     plan._baseUrl = (process.env.PUBLIC_BASE_URL || "https://patient-safety-rounds.vercel.app").replace(/\/$/, "");
 
+    if (action === "dismiss_overdue") {
+      if (!String(b.reason || "").trim()) return res.status(400).json({success:false,error:"A reason is required."});
+      if (plan.status === "Closed") return res.status(400).json({success:false,error:"Closed plans cannot be dismissed as overdue."});
+      const previous = await sbGet("audit_trail", `?action=eq.Overdue%20Action%20Dismissed&entity_type=eq.plan&entity_id=eq.${encodeURIComponent(String(id))}&select=id&limit=1`);
+      if (!previous.length) {
+        await logAudit({action:"Overdue Action Dismissed",entity_type:"plan",entity_id:id,actor:b.actor||"Quality",new_value:{reason:String(b.reason).trim(),finding_id:plan.finding_id}});
+      }
+      return res.status(200).json({success:true, dismissed:true});
+    }
     if (action === "accept") {
       const updated = await sbPatch("improvement_plans", `?id=eq.${encodeURIComponent(id)}`, { status: "Plan Accepted", updated_at: new Date().toISOString() });
       await logAudit({ action: "Plan Accepted", entity_type: "plan", entity_id: id, actor: b.actor });
