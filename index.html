@@ -292,6 +292,15 @@ hr.sep{border:none; border-top:1px solid var(--line-soft); margin:16px 0;}
 .executive-main-table th,.executive-findings-table th{border:1.2px solid #789398 !important;}
 .executive-main-table td div,.executive-findings-table td div{ text-align:center !important; }
 @media print{.executive-main-table th,.executive-main-table td,.executive-findings-table th,.executive-findings-table td{ text-align:center !important;vertical-align:middle !important; }}
+/* Print: preserve the entire official sign-off block on a dedicated page. */
+.executive-signoff-section{break-inside:avoid;page-break-inside:avoid;}
+@media print{
+  .executive-signoff-section{break-before:page !important;page-break-before:always !important;break-inside:avoid !important;page-break-inside:avoid !important;margin-top:0 !important;}
+  .executive-signoff-section .signoff-table{break-inside:avoid !important;page-break-inside:avoid !important;}
+  .executive-signoff-section .signoff-table tr{break-inside:avoid !important;page-break-inside:avoid !important;}
+  .executive-signoff-section .signoff-table td{height:37px !important;padding:6px 8px !important;}
+  .print-system-footer{display:none !important;}
+}
 </style>
 </head>
 <body>
@@ -5052,7 +5061,7 @@ async function viewExecutiveReportAsync(roundId){
         <b>NEXT ROUND DATE:</b><br>${nextRoundLine}
       </div>
 
-      <div style="margin-top:16px;">
+      <div class="executive-signoff-section" style="margin-top:16px;">
         <div style="font-weight:800;font-size:13px;margin-bottom:7px;">PATIENT SAFETY ROUNDS MEMBERS (Sign-off)</div>
         <table class="signoff-table" style="width:100%;border-collapse:collapse;table-layout:fixed;">
           <thead>
@@ -5071,7 +5080,6 @@ async function viewExecutiveReportAsync(roundId){
           </tbody>
         </table>
       </div>
-      <div class="print-only" style="margin-top:20px;font-size:10.5px;color:var(--ink-soft);">Generated from the Patient Safety Rounds Management System — ${fmtDate(todayStr())}</div>
     </div>`;
   } catch(error){
     content.innerHTML = `<div class="card card-pad"><b>${STATE.lang==='ar'?'تعذّر إنشاء التقرير':'Could not generate the report'}</b></div>`;
